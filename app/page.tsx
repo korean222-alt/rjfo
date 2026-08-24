@@ -1,0 +1,99 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import CommandInput from "@/components/CommandInput";
+import TickerInput from "@/components/TickerInput";
+import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
+import { saveAnalysis } from "@/lib/session";
+import type { FilterSpec } from "@/types";
+
+export default function Home() {
+  const router = useRouter();
+  const [ticker, setTicker] = useState("");
+  const [command, setCommand] = useState("");
+  const [tickerError, setTickerError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<null | "parse" | "analyze">(null);
+
+  async function run() {
+    setError(null);
+    setTickerError(null);
+
+    const t = normalizeTicker(ticker);
+    if (!t) return setTickerError("티커를 입력해 주세요.");
+    if (!isValidTicker(t)) return setTickerError("올바른 티커 형식이 아닙니다.");
+    if (!command.trim()) return setError("무엇을 찾을지 입력해 주세요.");
+
+    try {
+      // 1) 자연어 → FilterSpec (Claude는 파싱만 한다)
+      setBusy("parse");
+      const parseRes = await fetch("/api/parse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: command.trim() }),
+      });
+      const parsed = (await parseRes.json()) as { spec?: FilterSpec; error?: string };
+      if (!parseRes.ok || !parsed.spec) {
+        throw new Error(parsed.error ?? "명령을 이해하지 못했어요.");
+      }
+
+      // 2) 데이터 로드 + 지표 + 필터 + 통계 (전부 서버의 TypeScript 코드가 계산)
+      setBusy("analyze");
+      const analyzeRes = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker: t, spec: parsed.spec }),
+      });
+      const payload = await analyzeRes.json();
+      if (!analyzeRes.ok) throw new Error(payload.error ?? "분석에 실패했습니다.");
+
+      saveAnalysis(payload);
+      router.push("/results");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <main className="mx-auto max-w-lg px-4 py-8 pb-24">
+      <header className="mb-7">
+        <h1 className="text-2xl font-black">거래량 분석기</h1>
+        <p className="mt-1.5 text-sm text-muted leading-relaxed">
+          조건에 걸린 날의 이후 성과를, 아무 날이나 골랐을 때의 성과와 나란히 비교합니다.
+        </p>
+      </header>
+
+      <div className="space-y-6">
+        <TickerInput value={ticker} onChange={setTicker} error={tickerError} />
+        <CommandInput value={command} onChange={setCommand} />
+
+        {error ? (
+          <p className="rounded-xl border border-down/40 bg-down/10 px-4 py-3 text-sm text-down">
+            {error}
+          </p>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={run}
+          disabled={busy !== null}
+          className="w-full rounded-xl bg-blue-500 py-4 text-base font-bold text-white
+                     disabled:opacity-50 active:scale-[0.99] transition"
+        >
+          {busy === "parse"
+            ? "명령 해석 중…"
+            : busy === "analyze"
+              ? "과거 데이터 분석 중…"
+              : "분석하기"}
+        </button>
+      </div>
+
+      <p className="mt-8 text-center text-xs text-muted">
+        과거 패턴이며 투자 판단의 근거가 아닙니다.
+      </p>
+    </main>
+  );
+}
