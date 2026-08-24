@@ -57,7 +57,11 @@ high==low 봉의 0 나누기 방어, forward return, 클러스터링, AND/OR 로
 ## Vercel 배포
 
 1. 이 저장소를 GitHub에 푸시 (이미 되어 있음)
-2. [vercel.com/new](https://vercel.com/new) → 저장소 임포트 → 프레임워크는 Next.js로 자동 인식
+2. [vercel.com/new](https://vercel.com/new) → 저장소 임포트
+   - **Framework Preset은 반드시 Next.js.** "Other"로 두면 Vercel이 빌드를 하지 않고
+     레포 루트를 정적 파일로 서빙해서 `404: NOT_FOUND`가 뜬다.
+   - 레포의 `vercel.json`이 `"framework": "nextjs"`를 강제하므로 대시보드에서 잘못 골라도
+     덮어써진다.
 3. **Environment Variables**에 `GEMINI_API_KEY` 추가 (Production/Preview/Development 모두)
 4. Deploy
 
@@ -96,6 +100,10 @@ Vercel 대시보드에서 KV(Upstash Redis) 스토어를 붙이고 `KV_REST_API_
 
 **시간 예산**: 체인 전체에 `AI_DEADLINE_MS`(기본 15초)를 건다. Vercel 함수가 자체 타임아웃으로
 죽어서 502를 뱉는 대신, 예산 안에 사람이 읽을 수 있는 에러를 반환한다. 개별 호출도 최대 9초.
+
+> 배포 후 `/api/parse`에서 504(함수 타임아웃)가 뜬다면, 그 플랜의 함수 실행 시간 제한이
+> 15초보다 짧다는 뜻이다. 환경변수 `AI_DEADLINE_MS=8000`으로 낮추면 플랫폼이 함수를 죽이기
+> 전에 앱이 먼저 사람이 읽을 수 있는 에러를 반환한다.
 
 키 하나만 꽂으면 되는 게 아니라, **모델이 조용히 폐기돼도 자동으로 우회하는 구조**다.
 `npm run test:gemini`가 위 시나리오 9가지를 전부 검증한다.
@@ -138,6 +146,7 @@ lib/
   validate-spec.ts          LLM 출력 검증 (알려진 값만 통과)
 components/                 TickerInput, CommandInput, SummaryCard, VolumeChart, MatchList
 scripts/                    selftest.ts, verify.ts, gemini-test.ts
+vercel.json                 프레임워크 고정 (대시보드 오설정 방지)
 ```
 
 ## 파생 지표
