@@ -52,6 +52,9 @@ export async function GET(req: Request) {
       hasKv: Boolean(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN),
       hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
       hasTwelveDataKey: Boolean(process.env.TWELVE_DATA_API_KEY),
+      // hasKv가 false인데 스토어는 연결돼 있다면, 통합이 이름을 다르게 지었을 수 있다.
+      // 값은 절대 안 보여주고 이름만 나열한다.
+      kvLikeEnvKeys: Object.keys(process.env).filter((k) => /^(KV_|REDIS_|UPSTASH_)/i.test(k)),
     },
     sources,
     hint: sources.every((s) => !s.ok)
