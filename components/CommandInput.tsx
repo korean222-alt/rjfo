@@ -8,8 +8,6 @@ type Props = {
 };
 
 export default function CommandInput({ value, onChange }: Props) {
-  const selected = PRESET_CHIPS.find((chip) => chip.command === value) ?? null;
-
   return (
     <div>
       <label htmlFor="command" className="block text-sm font-medium text-muted mb-1.5">
@@ -20,37 +18,38 @@ export default function CommandInput({ value, onChange }: Props) {
         rows={3}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="예: 거래량은 늘었는데 주가는 거의 안 움직인 날"
+        placeholder="예: 20일 평균 대비 거래량 2.0배 이상이고 종가 변동이 ±2.0% 이내인 날"
         className="w-full rounded-xl bg-surface border border-border px-4 py-3 outline-none
                    focus:border-muted resize-none leading-relaxed"
       />
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {PRESET_CHIPS.map((chip) => {
-          const on = selected?.key === chip.key;
-          return (
-            <button
-              key={chip.key}
-              type="button"
-              onClick={() => onChange(chip.command)}
-              aria-pressed={on}
-              className={`rounded-full border px-3.5 py-2 text-sm transition active:scale-95 ${
-                on
-                  ? "border-blue-400 bg-blue-500/15 text-white"
-                  : "border-border bg-surface text-muted"
-              }`}
-            >
-              {chip.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {selected?.lookahead ? (
-        <p className="mt-2 text-xs text-amber-300/90">
-          이 신호는 이후에 실제로 올랐던 날만 골라내는 과거 검증용입니다.
-        </p>
-      ) : null}
+      <section className="mt-4" aria-label="빠른 신호 선택">
+        <div className="mb-2 flex items-baseline justify-between gap-3">
+          <p className="text-sm font-medium">빠른 신호 선택</p>
+          <p className="text-xs text-muted">선택하면 위 명령이 바뀝니다</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {PRESET_CHIPS.map((chip) => {
+            const selected = value === chip.command;
+            return (
+              <button
+                key={chip.key}
+                type="button"
+                onClick={() => onChange(chip.command)}
+                aria-pressed={selected}
+                className={`rounded-xl border px-3 py-3 text-left transition active:scale-[0.98] ${
+                  selected
+                    ? "border-blue-400 bg-blue-500/15"
+                    : "border-border bg-surface hover:border-muted"
+                }`}
+              >
+                <span className="block text-sm font-semibold">{chip.label}</span>
+                <span className="mt-1 block text-xs leading-relaxed text-muted">{chip.hint}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
     </div>
   );
 }

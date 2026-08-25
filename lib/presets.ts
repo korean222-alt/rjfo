@@ -1,20 +1,42 @@
 import type { Condition, FilterSpec, PresetName } from "@/types";
 
 export const PRESET_CONDITIONS: Record<PresetName, Condition[]> = {
-  // 흡수형: 거래량은 늘었는데 주가는 거의 안 움직임
+  // 물량 흡수: 거래량은 터졌는데 주가는 안 움직임
   absorption: [
-    { metric: "volume_ratio_20d", op: ">=", value: 1.5 },
-    { metric: "abs_close_change_pct", op: "<=", value: 3.0 },
+    { metric: "volume_ratio_20d", op: ">=", value: 2.0 },
+    { metric: "abs_close_change_pct", op: "<=", value: 2.0 },
   ],
-  // 고가마감형: 거래량 증가 + 고가 쪽 마감
+  // 고가마감: 거래량 증가 + 고가 부근 마감
   high_close: [
-    { metric: "volume_ratio_20d", op: ">=", value: 1.3 },
-    { metric: "close_position_in_range", op: ">=", value: 0.7 },
+    { metric: "volume_ratio_20d", op: ">=", value: 1.8 },
+    { metric: "close_position_in_range", op: ">=", value: 0.75 },
   ],
-  // 누적형: 오르는 날에 거래량이 몰림
+  // 누적 매집: 상승일에 거래량이 몰림
   accumulation: [
-    { metric: "up_down_vol_ratio_20d", op: ">=", value: 1.2 },
-    { metric: "obv_slope_20d", op: ">=", value: 0.1 },
+    { metric: "up_down_vol_ratio_20d", op: ">=", value: 1.5 },
+    { metric: "obv_slope_20d", op: ">=", value: 0.3 },
+  ],
+  // 상승 전 압축: 평소보다 좁아진 변동폭 속에서 거래량·종가 위치가 개선되는지 확인
+  squeeze: [
+    { metric: "atr_ratio_20d", op: "<=", value: 0.8 },
+    { metric: "volume_ratio_20d", op: ">=", value: 1.2 },
+    { metric: "close_position_in_range", op: ">=", value: 0.6 },
+  ],
+  // 거래량 확장: 평소 대비 뚜렷한 거래량 증가가 나온 날
+  volume_expansion: [
+    { metric: "volume_ratio_20d", op: ">=", value: 2.5 },
+    { metric: "volume_zscore_60d", op: ">=", value: 1.5 },
+  ],
+  // 강한 돌파: 거래량 급증과 함께 고가권에서 강하게 마감한 날
+  strong_breakout: [
+    { metric: "volume_ratio_20d", op: ">=", value: 2.0 },
+    { metric: "close_change_pct", op: ">=", value: 2.0 },
+    { metric: "close_position_in_range", op: ">=", value: 0.85 },
+  ],
+  // 수급 개선: 상승일 거래량 우위와 OBV 방향이 동시에 개선되는지 확인
+  flow_improvement: [
+    { metric: "up_down_vol_ratio_20d", op: ">=", value: 1.4 },
+    { metric: "obv_slope_20d", op: ">=", value: 0.15 },
   ],
 };
 
@@ -23,13 +45,17 @@ export type SignalKey =
   | "volume_spike"
   | "absorption"
   | "high_close"
+  | "pre_surge"
   | "accumulation"
-  | "pre_surge";
+  | "squeeze"
+  | "strong_breakout"
+  | "volume_expansion"
+  | "flow_improvement";
 
 export type PresetChip = {
   key: SignalKey;
   label: string;
-  /** 한 줄 설명 — 수식이 아니라 사람 말로. */
+  /** 수식 그대로 — 초기 버전대로 조건을 숫자로 명시한다. */
   hint: string;
   command: string;
   conditions: Condition[];
@@ -37,54 +63,84 @@ export type PresetChip = {
   lookahead?: FilterSpec["lookahead"];
 };
 
-/**
- * 빠른 신호 — 탭하면 명령창이 그 문장으로 바뀌고, 아래 conditions가 그대로 쓰인다
- * (AI 해석을 거치지 않으므로 결과가 항상 같다).
- *
- * 임계값은 "가끔은 실제로 걸리는" 수준으로 잡는다. 너무 조이면 매칭이 0이 되어
- * 통계도 알림도 무의미해진다.
- */
+/** UI 프리셋 카드 — 선택 시 아래 수치 조건을 그대로 적용한다. */
 export const PRESET_CHIPS: PresetChip[] = [
   {
     key: "volume_spike",
     label: "거래량 폭발",
-    hint: "평소보다 거래량이 2배 넘게 터진 날",
-    command: "평소보다 거래량이 2배 넘게 터진 날 찾아줘",
-    conditions: [{ metric: "volume_ratio_20d", op: ">=", value: 2.0 }],
+    hint: "20일 평균 거래량 대비 3.0배 이상",
+    command: "거래량 폭발: 20일 평균 대비 3.0배 이상 거래량인 날 찾아줘",
+    conditions: [{ metric: "volume_ratio_20d", op: ">=", value: 3.0 }],
     preset: null,
   },
   {
     key: "absorption",
     label: "물량 흡수",
-    hint: "거래량은 늘었는데 주가는 거의 안 움직인 날",
-    command: "거래량은 늘었는데 주가는 거의 안 움직인 날 찾아줘",
+    hint: "거래량 2.0배 이상 · 종가 변동 ±2.0% 이내",
+    command: "물량 흡수: 20일 평균 대비 거래량 2.0배 이상이고 종가 변동이 ±2.0% 이내인 날 찾아줘",
     conditions: PRESET_CONDITIONS.absorption,
     preset: "absorption",
   },
   {
     key: "high_close",
     label: "고가 마감",
-    hint: "거래량 늘면서 그날 고가 근처에서 끝난 날",
-    command: "거래량 늘면서 그날 고가 근처에서 끝난 날 찾아줘",
+    hint: "거래량 1.8배 이상 · 당일 고저폭 상위 25% 마감",
+    command: "고가 마감: 20일 평균 대비 거래량 1.8배 이상이고 당일 고저폭 상위 25%에서 마감한 날 찾아줘",
     conditions: PRESET_CONDITIONS.high_close,
     preset: "high_close",
   },
   {
+    key: "pre_surge",
+    label: "급등 직전",
+    hint: "이후 20거래일 안에 +20% 이상 상승한 과거 검증",
+    command: "급등 직전 검증: 이후 20거래일 안에 20% 이상 상승한 날의 직전 거래량 조건을 검증해줘",
+    conditions: [{ metric: "volume_ratio_20d", op: ">=", value: 2.0 }],
+    preset: null,
+    lookahead: { days: 20, min_return_pct: 20 },
+  },
+  {
     key: "accumulation",
     label: "누적 매집",
-    hint: "오르는 날에 거래량이 몰리고 있는 구간",
-    command: "오르는 날에 거래량이 몰리고 있는 날 찾아줘",
+    hint: "상승·하락일 거래량 비율 1.5 이상 · OBV 20일 기울기 0.3 이상",
+    command:
+      "누적 매집: 최근 20일 상승일 거래량 합이 하락일 거래량 합의 1.5배 이상이고 OBV 20일 기울기가 0.3 이상인 날 찾아줘",
     conditions: PRESET_CONDITIONS.accumulation,
     preset: "accumulation",
   },
   {
-    key: "pre_surge",
-    label: "급등 직전",
-    hint: "이후 20일 안에 크게 오른 날의 직전 거래량 (과거 검증용)",
-    command: "20일 안에 크게 급등하기 직전에 거래량이 늘었던 날 찾아줘",
-    conditions: [{ metric: "volume_ratio_20d", op: ">=", value: 1.5 }],
-    preset: null,
-    lookahead: { days: 20, min_return_pct: 15 },
+    key: "squeeze",
+    label: "상승 전 압축",
+    hint: "ATR 비율 0.8 이하 · 거래량 1.2배 이상 · 고저폭 상위 40% 마감",
+    command:
+      "상승 전 압축: ATR(14)가 20일 평균 ATR의 0.8배 이하이고 거래량이 20일 평균의 1.2배 이상이며 종가가 당일 고저폭 상위 40%에서 마감한 날 찾아줘",
+    conditions: PRESET_CONDITIONS.squeeze,
+    preset: "squeeze",
+  },
+  {
+    key: "strong_breakout",
+    label: "강한 돌파",
+    hint: "거래량 2.0배 이상 · +2.0% 이상 · 고저폭 상위 15% 마감",
+    command:
+      "강한 돌파: 20일 평균 대비 거래량 2.0배 이상이고 종가가 2.0% 이상 상승하며 당일 고저폭 상위 15%에서 마감한 날 찾아줘",
+    conditions: PRESET_CONDITIONS.strong_breakout,
+    preset: "strong_breakout",
+  },
+  {
+    key: "volume_expansion",
+    label: "거래량 확장",
+    hint: "거래량 2.5배 이상 · 60일 z-score 1.5 이상",
+    command: "거래량 확장: 20일 평균 대비 거래량 2.5배 이상이고 60일 거래량 z-score가 1.5 이상인 날 찾아줘",
+    conditions: PRESET_CONDITIONS.volume_expansion,
+    preset: "volume_expansion",
+  },
+  {
+    key: "flow_improvement",
+    label: "수급 개선",
+    hint: "상승·하락일 거래량 비율 1.4 이상 · OBV 20일 기울기 0.15 이상",
+    command:
+      "수급 개선: 최근 20일 상승일 거래량 합이 하락일 거래량 합의 1.4배 이상이고 OBV 20일 기울기가 0.15 이상인 날 찾아줘",
+    conditions: PRESET_CONDITIONS.flow_improvement,
+    preset: "flow_improvement",
   },
 ];
 
