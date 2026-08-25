@@ -211,6 +211,26 @@ console.log("\n[7] 빠른 신호 프리셋");
     expected.every((name) => PRESET_CONDITIONS[name].length > 0),
     "모든 빠른 신호가 하나 이상의 유효 조건을 가짐",
   );
+  assert(PRESET_CONDITIONS.absorption.length === 2, "기존 물량 흡수는 두 조건을 유지");
+  assert(
+    PRESET_CONDITIONS.absorption[0].metric === "volume_ratio_20d" &&
+      PRESET_CONDITIONS.absorption[0].value === 2 &&
+      PRESET_CONDITIONS.absorption[1].metric === "abs_close_change_pct" &&
+      PRESET_CONDITIONS.absorption[1].value === 2,
+    "기존 물량 흡수 = 20일 평균 거래량 2배 이상 · 종가 변동 ±2% 이내",
+  );
+  assert(
+    PRESET_CONDITIONS.high_close.length === 2 &&
+      PRESET_CONDITIONS.high_close[0].value === 1.8 &&
+      PRESET_CONDITIONS.high_close[1].value === 0.75,
+    "기존 고가 마감 = 거래량 1.8배 이상 · 종가 위치 0.75 이상",
+  );
+  assert(
+    PRESET_CONDITIONS.accumulation.length === 2 &&
+      PRESET_CONDITIONS.accumulation[0].value === 1.5 &&
+      PRESET_CONDITIONS.accumulation[1].value === 0.3,
+    "기존 누적 매집 = 상승·하락일 거래량 비율 1.5 이상 · OBV 기울기 0.3 이상",
+  );
   assert(PRESET_CONDITIONS.strong_breakout.length === 3, "강한 돌파는 거래량·가격·고가권 마감 조건을 사용");
   assert(PRESET_CONDITIONS.flow_improvement.length === 2, "수급 개선은 상승일 수급·OBV 조건을 사용");
 }

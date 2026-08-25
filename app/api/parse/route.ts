@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const EXAMPLE_HINT =
-  '예: "매집 신호", "상승 전 압축 신호", "초기 돌파 신호", "강한 돌파 신호", "수급 개선 신호"';
+  '예: "거래량 폭발", "물량 흡수", "고가 마감", "누적 매집", "상승 전 압축", "강한 돌파"';
 
 /** few-shot을 대화 형태로 넣는다. */
 function fewShotHistory(): GeminiTurn[] {
