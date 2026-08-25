@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { json } from "@/lib/json-response";
 import { TelegramError, sendTelegram } from "@/lib/alerts/telegram";
 
 export const runtime = "nodejs";
@@ -10,11 +10,11 @@ export async function POST() {
     await sendTelegram(
       "🔔 거래량 분석기 알림 테스트\n\n이 메시지가 보이면 설정이 끝난 겁니다.\n등록한 신호가 뜨는 날 장 마감 후에 알려드릴게요.",
     );
-    return NextResponse.json({ ok: true });
+    return json({ ok: true });
   } catch (e) {
     if (e instanceof TelegramError) {
-      return NextResponse.json({ error: e.message }, { status: 400 });
+      return json({ error: e.message }, { status: 400 });
     }
-    return NextResponse.json({ error: `전송 실패: ${(e as Error).message}` }, { status: 500 });
+    return json({ error: `전송 실패: ${(e as Error).message}` }, { status: 500 });
   }
 }

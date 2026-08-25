@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { json } from "@/lib/json-response";
 import { TelegramError, recentChatIds } from "@/lib/alerts/telegram";
 
 export const runtime = "nodejs";
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     const chats = await recentChatIds();
-    return NextResponse.json({
+    return json({
       chats,
       hint: chats.length
         ? "이 중 본인 채팅의 id를 환경변수 TELEGRAM_CHAT_ID에 넣으세요."
@@ -19,8 +19,8 @@ export async function GET() {
     });
   } catch (e) {
     if (e instanceof TelegramError) {
-      return NextResponse.json({ error: e.message }, { status: 400 });
+      return json({ error: e.message }, { status: 400 });
     }
-    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    return json({ error: (e as Error).message }, { status: 500 });
   }
 }

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { json } from "@/lib/json-response";
 import { getProviders } from "@/lib/data";
 import { DataProviderError, isValidTicker, normalizeTicker } from "@/lib/data/provider";
 
@@ -16,7 +16,7 @@ export async function GET(req: Request) {
   const raw = new URL(req.url).searchParams.get("ticker") ?? "AAPL";
   const ticker = normalizeTicker(raw);
   if (!isValidTicker(ticker)) {
-    return NextResponse.json({ error: `'${ticker}'는 올바른 티커 형식이 아닙니다.` }, { status: 400 });
+    return json({ error: `'${ticker}'는 올바른 티커 형식이 아닙니다.` }, { status: 400 });
   }
 
   const sources = [];
@@ -43,7 +43,7 @@ export async function GET(req: Request) {
     }
   }
 
-  return NextResponse.json({
+  return json({
     ticker,
     // 어떤 환경변수가 실제로 함수에 들어와 있는지 (값은 노출하지 않는다)
     env: {
