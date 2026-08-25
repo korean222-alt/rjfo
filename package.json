@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "verify": "tsx scripts/verify.ts",
     "selftest": "tsx scripts/selftest.ts",
-    "test:gemini": "tsx scripts/gemini-test.ts"
+    "test:gemini": "tsx scripts/gemini-test.ts",
+    "test:data": "tsx scripts/data-test.ts"
   },
   "dependencies": {
     "next": "14.2.35",

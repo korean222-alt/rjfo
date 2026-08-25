@@ -1,0 +1,227 @@
+/**
+ * 시세 소스 체인 검증 (실제 네트워크 호출 없음 — fetch를 가짜로 갈아끼운다).
+ *   npx tsx scripts/data-test.ts
+ *
+ * 검증 대상:
+ *  - Yahoo 429일 때 다른 호스트 → 쿠키+crumb 세션 순으로 재시도하는가
+ *  - Yahoo가 계속 429면 Stooq 폴백으로 넘어가는가
+ *  - Stooq CSV 파싱 / 심볼 매핑이 맞는가
+ *  - 404(없는 티커)는 재시도 없이 즉시 끝나는가
+ *  - 전부 실패했을 때 만료된 캐시라도 내보내는가
+ */
+import { loadBars } from "../lib/data";
+import { __clearMemoryCache, setCachedBars } from "../lib/data/cache";
+import { DataProviderError } from "../lib/data/provider";
+import { parseStooqCsv, toStooqSymbol } from "../lib/data/stooq";
+import { __resetYahooSession } from "../lib/data/yahoo";
+import type { Bar } from "../types";
+
+let failures = 0;
+
+function assert(cond: boolean, label: string) {
+  if (cond) console.log(`  ✓ ${label}`);
+  else {
+    console.error(`  ✗ ${label}`);
+    failures++;
+  }
+}
+
+const realFetch = globalThis.fetch;
+type Handler = (url: string, init?: RequestInit) => Response | Promise<Response>;
+let calls: string[] = [];
+
+function install(handler: Handler) {
+  calls = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    calls.push(url);
+    return handler(url, init);
+  }) as typeof fetch;
+}
+
+function restore() {
+  globalThis.fetch = realFetch;
+}
+
+function reset() {
+  __clearMemoryCache();
+  __resetYahooSession();
+  delete process.env.DATA_PROVIDER;
+  delete process.env.KV_REST_API_URL;
+  delete process.env.KV_REST_API_TOKEN;
+  process.env.DATA_DEADLINE_MS = "3000";
+}
+
+/** N일치 Yahoo chart 응답. */
+function yahooChart(days = 90): Response {
+  const start = Date.UTC(2024, 0, 2) / 1000;
+  const timestamp: number[] = [];
+  const open: number[] = [];
+  const high: number[] = [];
+  const low: number[] = [];
+  const close: number[] = [];
+  const volume: number[] = [];
+  for (let i = 0; i < days; i++) {
+    timestamp.push(start + i * 86400);
+    const c = 100 + i * 0.1;
+    open.push(c);
+    high.push(c * 1.01);
+    low.push(c * 0.99);
+    close.push(c);
+    volume.push(1_000_000);
+  }
+  return new Response(
+    JSON.stringify({
+      chart: {
+        error: null,
+        result: [
+          {
+            timestamp,
+            indicators: { quote: [{ open, high, low, close, volume }] },
+            meta: { exchangeTimezoneName: "America/New_York" },
+          },
+        ],
+      },
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
+function stooqCsv(days = 90): string {
+  const rows = ["Date,Open,High,Low,Close,Volume"];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(Date.UTC(2024, 0, 2 + i)).toISOString().slice(0, 10);
+    const c = (100 + i * 0.1).toFixed(2);
+    rows.push(`${d},${c},${c},${c},${c},1000000`);
+  }
+  return rows.join("\n");
+}
+
+const main = async () => {
+
+console.log("\n[1] Stooq 심볼 매핑");
+{
+  assert(toStooqSymbol("NVDA") === "nvda.us", "NVDA → nvda.us");
+  assert(toStooqSymbol("BRK.B") === "brk-b.us", "BRK.B → brk-b.us (클래스는 하이픈)");
+  assert(toStooqSymbol("005930.KS") === "005930.ks", "005930.KS → 005930.ks (거래소 접미사 유지)");
+  assert(toStooqSymbol("^GSPC") === "^spx", "^GSPC → ^spx");
+}
+
+console.log("\n[2] Stooq CSV 파싱");
+{
+  const bars = parseStooqCsv(stooqCsv(5));
+  assert(bars.length === 5, `5행 파싱 (${bars.length})`);
+  assert(bars[0].date === "2024-01-02", `첫 날짜 ${bars[0].date}`);
+  assert(bars[0].volume === 1_000_000, "거래량 파싱");
+  assert(parseStooqCsv("<html>error</html>").length === 0, "CSV가 아니면 빈 배열");
+  const dirty = "Date,Open,High,Low,Close,Volume\n2024-01-02,1,1,1,1,10\nbad,line\n2024-01-03,N/D,1,1,1,10";
+  assert(parseStooqCsv(dirty).length === 1, "깨진 행은 버린다");
+}
+
+console.log("\n[3] Yahoo 429 → 호스트 교체 → 쿠키+crumb 재시도");
+{
+  reset();
+  let chartHits = 0;
+  install((url) => {
+    if (url.includes("fc.yahoo.com")) {
+      return new Response("", { status: 200, headers: { "set-cookie": "A1=abc; Path=/; Domain=.yahoo.com" } });
+    }
+    if (url.includes("/v1/test/getcrumb")) return new Response("Cr3mB", { status: 200 });
+    chartHits++;
+    // crumb을 달고 온 요청만 통과시킨다.
+    return url.includes("crumb=") ? yahooChart() : new Response("Too Many Requests", { status: 429 });
+  });
+
+  const bars = await loadBars("NVDA");
+  restore();
+  assert(bars.length === 90, `일봉 ${bars.length}개 확보`);
+  assert(chartHits >= 3, `crumb 없이 실패 후 재시도함 (chart 호출 ${chartHits}회)`);
+  assert(calls.some((u) => u.includes("query2")), "두 번째 호스트도 시도함");
+  assert(calls.some((u) => u.includes("crumb=Cr3mB")), "확보한 crumb을 붙여 재시도함");
+}
+
+console.log("\n[4] 캐시 히트면 외부 호출 없음");
+{
+  install(() => new Response("nope", { status: 500 }));
+  const bars = await loadBars("NVDA"); // [3]에서 캐시됨
+  restore();
+  assert(bars.length === 90, "캐시에서 반환");
+  assert(calls.length === 0, `외부 호출 0회 (${calls.length})`);
+}
+
+console.log("\n[5] Yahoo가 계속 429 → Stooq 폴백");
+{
+  reset();
+  install((url) => {
+    if (url.includes("stooq.com")) {
+      return new Response(stooqCsv(120), { status: 200, headers: { "content-type": "text/csv" } });
+    }
+    return new Response("Too Many Requests", { status: 429 });
+  });
+
+  const bars = await loadBars("AAPL");
+  restore();
+  assert(bars.length === 120, `Stooq에서 ${bars.length}개 확보`);
+  assert(calls.some((u) => u.includes("stooq.com/q/d/l/?s=aapl.us")), "stooq를 aapl.us로 조회");
+}
+
+console.log("\n[6] 없는 티커는 즉시 404");
+{
+  reset();
+  install((url) => {
+    if (url.includes("stooq.com")) return new Response("No data", { status: 200 });
+    return new Response("Not Found", { status: 404 });
+  });
+
+  let err: unknown = null;
+  try {
+    await loadBars("ZZZZTEST");
+  } catch (e) {
+    err = e;
+  }
+  restore();
+  assert(err instanceof DataProviderError && err.status === 404, "404 DataProviderError");
+  const yahooCalls = calls.filter((u) => u.includes("finance.yahoo.com")).length;
+  assert(yahooCalls === 1, `Yahoo는 재시도하지 않음 (${yahooCalls}회)`);
+}
+
+console.log("\n[7] 전부 실패해도 만료된 캐시가 있으면 그걸 쓴다");
+{
+  reset();
+  const stale: Bar[] = parseStooqCsv(stooqCsv(70));
+  await setCachedBars("MSFT", stale);
+  // 저장 시각을 하루 전으로 되돌려 fresh(12시간)를 넘긴다.
+  const { __setSavedAtForTest } = await import("../lib/data/cache");
+  __setSavedAtForTest("MSFT", Date.now() - 24 * 60 * 60 * 1000);
+
+  install(() => new Response("Too Many Requests", { status: 429 }));
+  const bars = await loadBars("MSFT");
+  restore();
+  assert(bars.length === 70, `만료 캐시 반환 (${bars.length})`);
+  assert(calls.length > 0, "만료됐으므로 외부 호출은 시도했다");
+}
+
+console.log("\n[8] 캐시도 없고 전부 429면 429 에러");
+{
+  reset();
+  install(() => new Response("Too Many Requests", { status: 429 }));
+  let err: unknown = null;
+  try {
+    await loadBars("TSLA");
+  } catch (e) {
+    err = e;
+  }
+  restore();
+  assert(err instanceof DataProviderError && err.status === 429, "429 DataProviderError");
+  assert(
+    err instanceof DataProviderError && err.message.includes("잠시 후"),
+    `사람이 읽을 수 있는 안내 문구: ${(err as Error).message}`,
+  );
+}
+
+console.log(failures === 0 ? "\n✅ 전부 통과\n" : `\n❌ ${failures}개 실패\n`);
+process.exit(failures === 0 ? 0 : 1);
+
+};
+
+main();
