@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { generateText, GeminiError, type GeminiTurn } from "@/lib/gemini";
 import { FEW_SHOT, PARSER_SYSTEM_PROMPT } from "@/lib/parse-prompt";
 import { extractJson, validateSpec } from "@/lib/validate-spec";
+import { PRESET_CHIPS } from "@/lib/presets";
 import type { FilterSpec } from "@/types";
 
 export const runtime = "nodejs";
@@ -19,15 +20,6 @@ function fewShotHistory(): GeminiTurn[] {
 }
 
 export async function POST(req: Request) {
-  // env는 호출 시점에 읽는다 (최상위에서 읽으면 빌드 타임에 인라인된다).
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "서버에 GEMINI_API_KEY가 설정되지 않았습니다." },
-      { status: 500 },
-    );
-  }
-
   let command: string;
   try {
     const body = (await req.json()) as { command?: unknown };
@@ -41,6 +33,29 @@ export async function POST(req: Request) {
   }
   if (command.length > 500) {
     return NextResponse.json({ error: "명령이 너무 깁니다 (500자 이내)." }, { status: 400 });
+  }
+
+  // 카드 선택 명령은 AI 해석을 거치지 않는다. 화면에 표시한 조건을 그대로 사용한다.
+  const selected = PRESET_CHIPS.find((chip) => chip.command === command);
+  if (selected) {
+    const spec: FilterSpec = {
+      conditions: selected.conditions,
+      logic: "AND",
+      preset: selected.preset,
+      lookahead: selected.lookahead,
+      interpretation: `${selected.label}: ${selected.description}`,
+      confidence: selected.lookahead ? "low" : "high",
+    };
+    return NextResponse.json({ spec, model: "preset" });
+  }
+
+  // 직접 입력한 자유 명령만 AI로 해석한다.
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json(
+      { error: "서버에 GEMINI_API_KEY가 설정되지 않았습니다." },
+      { status: 500 },
+    );
   }
 
   const fewShot = fewShotHistory();
