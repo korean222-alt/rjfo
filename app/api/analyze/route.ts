@@ -2,14 +2,17 @@ import { NextResponse } from "next/server";
 import { loadBars } from "@/lib/data";
 import { DataProviderError, isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import { enrich } from "@/lib/indicators";
+import { BarValidationError, validateBars } from "@/lib/validate-bars";
 import { analyze } from "@/lib/stats";
 import { validateSpec } from "@/lib/validate-spec";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// 시세 소스 폴백(Yahoo 재시도 → Stooq)까지 감당할 여유. 기본 10초로는 모자란다.
+export const maxDuration = 30;
 
 export async function POST(req: Request) {
-  let body: { ticker?: unknown; spec?: unknown; cluster?: unknown };
+  let body: { ticker?: unknown; spec?: unknown; cluster?: unknown; bars?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -31,8 +34,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: `조건이 올바르지 않습니다: ${(e as Error).message}` }, { status: 400 });
   }
 
+  // 서버가 시세 소스에 막혔을 때, 브라우저가 직접 받아온 일봉을 실어 보낼 수 있다.
+  // 형식은 여기서 전부 검증하고, 계산은 평소처럼 서버 코드가 한다.
+  let clientBars: Awaited<ReturnType<typeof loadBars>> | null = null;
+  if (body.bars !== undefined) {
+    try {
+      clientBars = validateBars(body.bars);
+    } catch (e) {
+      const msg = e instanceof BarValidationError ? e.message : "알 수 없는 오류";
+      return NextResponse.json({ error: `일봉 데이터가 올바르지 않습니다: ${msg}` }, { status: 400 });
+    }
+  }
+
   try {
-    const bars = await loadBars(ticker);
+    const bars = clientBars ?? (await loadBars(ticker));
     if (bars.length < 60) {
       return NextResponse.json(
         { error: `'${ticker}'의 데이터가 ${bars.length}일치뿐이라 분석할 수 없습니다.` },

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import MatchList from "@/components/MatchList";
 import SummaryCard from "@/components/SummaryCard";
+import { runAnalyze } from "@/lib/analyze-client";
 import { compactNumber } from "@/lib/format";
 import { loadAnalysis, saveAnalysis, type AnalysisPayload } from "@/lib/session";
 
@@ -41,17 +42,12 @@ export default function ResultsPage() {
       if (!result) return;
       setBusy(true);
       try {
-        const res = await fetch("/api/analyze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ticker: result.ticker, spec: result.spec, cluster: next }),
-        });
-        const data = await res.json();
-        if (res.ok) {
-          saveAnalysis(data);
-          setPayload(data);
-          setCluster(next);
-        }
+        const data = await runAnalyze(result.ticker, result.spec, { cluster: next });
+        saveAnalysis(data);
+        setPayload(data);
+        setCluster(next);
+      } catch {
+        // 토글 실패는 화면을 그대로 두면 된다 (기존 결과가 유효하다).
       } finally {
         setBusy(false);
       }

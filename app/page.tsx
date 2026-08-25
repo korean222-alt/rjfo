@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import CommandInput from "@/components/CommandInput";
 import TickerInput from "@/components/TickerInput";
+import { runAnalyze } from "@/lib/analyze-client";
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import { saveAnalysis } from "@/lib/session";
 import type { FilterSpec } from "@/types";
@@ -14,7 +15,7 @@ export default function Home() {
   const [command, setCommand] = useState("");
   const [tickerError, setTickerError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<null | "parse" | "analyze">(null);
+  const [busy, setBusy] = useState<null | "parse" | "analyze" | "fallback">(null);
 
   async function run() {
     setError(null);
@@ -39,14 +40,11 @@ export default function Home() {
       }
 
       // 2) 데이터 로드 + 지표 + 필터 + 통계 (전부 서버의 TypeScript 코드가 계산)
+      //    서버가 시세 소스에 막히면 브라우저가 직접 받아 넘기는 경로로 폴백한다.
       setBusy("analyze");
-      const analyzeRes = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker: t, spec: parsed.spec }),
+      const payload = await runAnalyze(t, parsed.spec, {
+        onFallback: () => setBusy("fallback"),
       });
-      const payload = await analyzeRes.json();
-      if (!analyzeRes.ok) throw new Error(payload.error ?? "분석에 실패했습니다.");
 
       saveAnalysis(payload);
       router.push("/results");
@@ -87,7 +85,9 @@ export default function Home() {
             ? "명령 해석 중…"
             : busy === "analyze"
               ? "과거 데이터 분석 중…"
-              : "분석하기"}
+              : busy === "fallback"
+                ? "시세 직접 받아오는 중…"
+                : "분석하기"}
         </button>
       </div>
 
