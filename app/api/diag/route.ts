@@ -1,6 +1,7 @@
 import { json } from "@/lib/json-response";
 import { getProviders } from "@/lib/data";
 import { DataProviderError, isValidTicker, normalizeTicker } from "@/lib/data/provider";
+import { kvConfigured } from "@/lib/kv";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,16 +50,9 @@ export async function GET(req: Request) {
     env: {
       DATA_PROVIDER: process.env.DATA_PROVIDER ?? null,
       DATA_DEADLINE_MS: process.env.DATA_DEADLINE_MS ?? null,
-      hasKv: Boolean(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN),
+      hasKv: kvConfigured(),
       hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
       hasTwelveDataKey: Boolean(process.env.TWELVE_DATA_API_KEY),
-      // hasKv가 false인데 스토어는 연결돼 있다면, 통합이 이름을 다르게 지었을 수 있다.
-      // 값은 절대 안 보여주고 길이만 잰다(0=비어있음, undefined=아예 없음).
-      kvLikeEnvKeys: Object.fromEntries(
-        Object.keys(process.env)
-          .filter((k) => /^(KV_|REDIS_|UPSTASH_)/i.test(k))
-          .map((k) => [k, process.env[k]?.length ?? 0]),
-      ),
     },
     sources,
     hint: sources.every((s) => !s.ok)

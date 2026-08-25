@@ -7,9 +7,16 @@
 
 const TIMEOUT_MS = 3_000;
 
+/**
+ * Vercel Marketplace로 Upstash Redis를 다시 연결하면서, 이 프로젝트에는 환경변수
+ * prefix가 "KV_REST_API_URL"로 잘못 들어가 실제 값이 KV_REST_API_URL_KV_REST_API_URL /
+ * KV_REST_API_URL_KV_REST_API_TOKEN 밑에 들어 있다 (원래 이름인 KV_REST_API_URL /
+ * KV_REST_API_TOKEN은 빈 문자열로 남아있다). 대시보드에서 접두사를 정리할 때까지
+ * 이 이름도 폴백으로 봐준다.
+ */
 function config() {
-  const url = process.env.KV_REST_API_URL;
-  const token = process.env.KV_REST_API_TOKEN;
+  const url = process.env.KV_REST_API_URL || process.env.KV_REST_API_URL_KV_REST_API_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.KV_REST_API_URL_KV_REST_API_TOKEN;
   return url && token ? { url: url.replace(/\/+$/, ""), token } : null;
 }
 
