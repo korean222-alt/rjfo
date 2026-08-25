@@ -99,18 +99,31 @@ export class TwelveDataProvider implements DataProvider {
     try {
       json = (await res.json()) as TwelveResponse;
     } catch {
-      throw new DataProviderError(`시세 서버 응답을 읽지 못했습니다 (HTTP ${res.status}).`, 502);
+      // 한도 초과·차단은 JSON이 아니라 평문으로 올 때가 있다. 본문을 못 읽는다고
+      // 전부 502로 뭉뚱그리면 "한도 초과"라는 진짜 원인이 사라진다.
+      throw new DataProviderError(
+        `시세 서버 응답을 읽지 못했습니다 (HTTP ${res.status}).`,
+        res.status === 429 ? 429 : 502,
+      );
     }
 
     // Twelve Data는 오류도 HTTP 200에 담아 보낼 때가 있다. 본문의 status를 먼저 본다.
     if (json.status === "error" || (!res.ok && !json.values)) {
       const code = json.code ?? res.status;
       const message = json.message ?? `HTTP ${res.status}`;
+      // 무료 플랜에서 막힌 심볼·거래소는 "키가 틀렸다"가 아니다. 키를 넣었는데도 계속
+      // 실패한다면 대개 이쪽이므로, 무엇을 해야 하는지 알 수 있게 따로 구분한다.
+      if (/plan|upgrade|exclusively|subscription/i.test(message)) {
+        throw new DataProviderError(
+          `'${ticker}'은(는) 현재 Twelve Data 플랜에서 제공되지 않습니다: ${message}`,
+          502,
+        );
+      }
+      if (code === 429 || /api credits|rate limit/i.test(message)) {
+        throw new DataProviderError(`시세 API 호출 한도를 초과했습니다: ${message}`, 429);
+      }
       if (code === 404 || /not found|symbol/i.test(message)) {
         throw new DataProviderError(`'${ticker}' 티커를 찾을 수 없습니다.`, 404);
-      }
-      if (code === 429) {
-        throw new DataProviderError(`시세 API 호출 한도를 초과했습니다: ${message}`, 429);
       }
       if (code === 401 || code === 403) {
         throw new DataProviderError(`시세 API 키가 거부되었습니다: ${message}`, 502);
