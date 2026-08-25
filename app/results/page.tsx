@@ -4,13 +4,25 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import CommandInput from "@/components/CommandInput";
+import MaControls from "@/components/MaControls";
 import MatchList from "@/components/MatchList";
 import SummaryCard from "@/components/SummaryCard";
 import TickerInput from "@/components/TickerInput";
 import { runAnalyze } from "@/lib/analyze-client";
 import { compactNumber } from "@/lib/format";
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
-import { loadAnalysis, loadSearchDraft, saveAnalysis, saveSearchDraft, type AnalysisPayload } from "@/lib/session";
+import { detectMaCrosses, maLines } from "@/lib/ma-cross";
+import {
+  DEFAULT_MA,
+  loadAnalysis,
+  loadMaSettings,
+  loadSearchDraft,
+  saveAnalysis,
+  saveMaSettings,
+  saveSearchDraft,
+  type AnalysisPayload,
+  type MaSettings,
+} from "@/lib/session";
 import type { FilterSpec } from "@/types";
 
 // lightweight-charts는 브라우저 전용
@@ -19,8 +31,20 @@ const VolumeChart = dynamic(() => import("@/components/VolumeChart"), {
   loading: () => <div className="h-[276px] rounded-2xl border border-border bg-surface" />,
 });
 
-/** 신호 간 최소 간격 선택지 (거래일). 20 ≈ 한 달. */
-const MIN_GAP_CHOICES = [0, 5, 10, 20, 40];
+/**
+ * 희귀도 하한 선택지.
+ *
+ * 시간 간격으로 신호를 솎아내지 않는 이유: 그러면 그 구간에서 제일 중요한 날이
+ * 통째로 사라진다. 대신 "얼마나 드문 날인가"로 자르면, 강한 신호는 며칠을
+ * 연달아 떠도 전부 남는다.
+ */
+const TOP_PCT_CHOICES: { value: number; label: string }[] = [
+  { value: 100, label: "전체" },
+  { value: 50, label: "상위 50%" },
+  { value: 30, label: "상위 30%" },
+  { value: 20, label: "상위 20%" },
+  { value: 10, label: "상위 10%" },
+];
 
 export default function ResultsPage() {
   const [payload, setPayload] = useState<AnalysisPayload | null>(null);
@@ -32,6 +56,7 @@ export default function ResultsPage() {
   const [tickerInput, setTickerInput] = useState("");
   const [commandInput, setCommandInput] = useState("");
   const [editorError, setEditorError] = useState<string | null>(null);
+  const [ma, setMa] = useState<MaSettings>(DEFAULT_MA);
 
   useEffect(() => {
     const p = loadAnalysis();
@@ -43,6 +68,7 @@ export default function ResultsPage() {
       setTickerInput(matchingDraft?.ticker ?? p.result.ticker);
       setCommandInput(matchingDraft?.command ?? p.result.spec.interpretation);
     }
+    setMa(loadMaSettings());
     setLoaded(true);
   }, []);
 
@@ -72,9 +98,9 @@ export default function ResultsPage() {
     [result],
   );
 
-  /** 발화 규칙(첫 진입만 · 최소 간격)을 바꿔 같은 조건으로 다시 계산한다. */
-  const updateTrigger = useCallback(
-    async (patch: Partial<Pick<FilterSpec, "fresh_only" | "min_gap_days">>) => {
+  /** 신호 정리 규칙(희귀도 하한 · 국면 대표일)을 바꿔 같은 조건으로 다시 계산한다. */
+  const updateSignalRule = useCallback(
+    async (patch: Partial<Pick<FilterSpec, "top_pct" | "cluster_pick">>) => {
       if (!result) return;
       setBusy(true);
       try {
@@ -126,6 +152,27 @@ export default function ResultsPage() {
       setBusy(false);
     }
   }, [commandInput, tickerInput]);
+
+  const updateMa = useCallback((next: MaSettings) => {
+    setMa(next);
+    saveMaSettings(next);
+  }, []);
+
+  // 이동평균선·교차는 이미 받아둔 시계열로 브라우저에서 바로 계산한다.
+  // 계산식은 lib/ma-cross.ts에 있고 selftest가 검산한다 — 기간을 바꿔도 서버를 다시 부르지 않는다.
+  const maOverlay = useMemo(() => {
+    const series = payload?.series;
+    if (!series?.length || !ma.enabled || ma.fast >= ma.slow) return null;
+    const bars = series.map((p) => ({ date: p.date, close: p.close }));
+    const lines = maLines(bars, ma.fast, ma.slow);
+    return {
+      fastPeriod: ma.fast,
+      slowPeriod: ma.slow,
+      fast: lines.fast,
+      slow: lines.slow,
+      crosses: detectMaCrosses(bars, ma.fast, ma.slow),
+    };
+  }, [ma, payload?.series]);
 
   const exportCsv = useCallback(() => {
     if (!result) return;
@@ -285,66 +332,77 @@ export default function ResultsPage() {
       <SummaryCard result={result} />
 
       <div className="my-4">
-        <VolumeChart series={payload.series} matchDates={matchDates} />
+        <VolumeChart series={payload.series} matchDates={matchDates} ma={maOverlay} />
       </div>
 
       <section className="mb-3 rounded-xl border border-border bg-surface px-4 py-3">
         <div className="flex items-baseline justify-between gap-3">
-          <p className="text-sm font-semibold">신호 발화 규칙</p>
+          <p className="text-sm font-semibold">신호 정리</p>
           <p className="text-xs text-muted">
             조건 충족 {result.rawMatchCount}일 → 신호 {result.stats.matchCount}개
           </p>
         </div>
 
-        <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">
-          <div className="min-w-0">
-            <p className="text-sm font-medium">첫 진입만</p>
-            <p className="text-xs leading-relaxed text-muted">
-              조건에 새로 들어온 날만 신호로 셉니다 (20일 롤링 지표는 며칠씩 계속 참이라 그대로 두면 신호가 몰립니다)
+        <div className="mt-3 border-t border-border pt-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <p className="text-sm font-medium">희귀도 상위만</p>
+            <p className="text-xs text-muted">
+              {result.signalRule.topPct >= 100 ? "전부 표시" : `상위 ${result.signalRule.topPct}%`}
             </p>
           </div>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => updateTrigger({ fresh_only: !result.trigger.freshOnly })}
-            className={`h-7 w-12 shrink-0 rounded-full transition disabled:opacity-50 ${
-              result.trigger.freshOnly ? "bg-blue-500" : "bg-border"
-            }`}
-            aria-pressed={result.trigger.freshOnly}
-            aria-label="첫 진입만"
-          >
-            <span
-              className={`block h-6 w-6 rounded-full bg-white transition-transform ${
-                result.trigger.freshOnly ? "translate-x-5" : "translate-x-0.5"
-              }`}
-            />
-          </button>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            드문 신호부터 순서대로 남깁니다. 며칠이 지났는지는 보지 않으므로, 강한 신호는
+            연달아 떠도 잘려나가지 않습니다.
+          </p>
+          <div className="mt-2 grid grid-cols-5 gap-1.5">
+            {TOP_PCT_CHOICES.map((choice) => {
+              const active = result.signalRule.topPct === choice.value;
+              return (
+                <button
+                  key={choice.value}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => updateSignalRule({ top_pct: choice.value })}
+                  aria-pressed={active}
+                  className={`rounded-lg border py-2 text-[11px] font-medium tabular-nums transition disabled:opacity-50 ${
+                    active ? "border-blue-400 bg-blue-500/15" : "border-border bg-bg text-muted"
+                  }`}
+                >
+                  {choice.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <div className="mt-3 border-t border-border pt-3">
           <div className="flex items-baseline justify-between gap-3">
-            <p className="text-sm font-medium">신호 간 최소 간격</p>
-            <p className="text-xs text-muted">
-              {result.trigger.minGapDays === 0
-                ? "제한 없음"
-                : `${result.trigger.minGapDays}거래일`}
-            </p>
+            <p className="text-sm font-medium">국면 대표일</p>
+            <p className="text-xs text-muted">gap {result.signalRule.clusterGap}일</p>
           </div>
-          <div className="mt-2 grid grid-cols-5 gap-1.5">
-            {MIN_GAP_CHOICES.map((days) => {
-              const active = result.trigger.minGapDays === days;
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            붙어 있는 매칭일을 한 국면으로 묶고 그중 하루만 신호로 남깁니다.
+          </p>
+          <div className="mt-2 grid grid-cols-2 gap-1.5">
+            {(
+              [
+                { value: "rarest", label: "가장 희귀한 날" },
+                { value: "first", label: "가장 이른 날" },
+              ] as const
+            ).map((choice) => {
+              const active = result.signalRule.clusterPick === choice.value;
               return (
                 <button
-                  key={days}
+                  key={choice.value}
                   type="button"
                   disabled={busy}
-                  onClick={() => updateTrigger({ min_gap_days: days })}
+                  onClick={() => updateSignalRule({ cluster_pick: choice.value })}
                   aria-pressed={active}
-                  className={`rounded-lg border py-2 text-xs font-medium tabular-nums transition disabled:opacity-50 ${
+                  className={`rounded-lg border py-2 text-xs font-medium transition disabled:opacity-50 ${
                     active ? "border-blue-400 bg-blue-500/15" : "border-border bg-bg text-muted"
                   }`}
                 >
-                  {days === 0 ? "없음" : `${days}일`}
+                  {choice.label}
                 </button>
               );
             })}
@@ -353,8 +411,8 @@ export default function ResultsPage() {
 
         <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">
           <div className="min-w-0">
-            <p className="text-sm font-medium">연속일 묶기</p>
-            <p className="text-xs text-muted">연속으로 붙은 매칭일을 하나로 계산</p>
+            <p className="text-sm font-medium">국면 묶기</p>
+            <p className="text-xs text-muted">끄면 조건을 만족한 날을 전부 신호로 셉니다</p>
           </div>
           <button
             type="button"
@@ -364,7 +422,7 @@ export default function ResultsPage() {
               cluster ? "bg-blue-500" : "bg-border"
             }`}
             aria-pressed={cluster}
-            aria-label="연속일 묶기"
+            aria-label="국면 묶기"
           >
             <span
               className={`block h-6 w-6 rounded-full bg-white transition-transform ${
@@ -374,6 +432,10 @@ export default function ResultsPage() {
           </button>
         </div>
       </section>
+
+      <div className="mb-3">
+        <MaControls settings={ma} onChange={updateMa} crosses={maOverlay?.crosses ?? []} />
+      </div>
 
       <h2 className="mb-2 mt-6 text-sm font-semibold text-muted">
         매칭 날짜 · 총 거래량 {compactNumber(result.matches.reduce((a, m) => a + m.volume, 0))}

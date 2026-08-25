@@ -18,7 +18,17 @@ export default function MatchList({ matches }: { matches: MatchRow[] }) {
       {matches.map((m) => (
         <li key={m.date} className="rounded-2xl border border-border bg-surface p-4">
           <div className="flex items-center justify-between">
-            <span className="font-semibold tabular-nums">{m.date}</span>
+            <span className="font-semibold tabular-nums">
+              {m.date}
+              {m.rarity == null ? null : (
+                <span
+                  className="ml-2 rounded-md bg-bg px-1.5 py-0.5 text-[11px] font-medium text-muted"
+                  title="이 종목 역사에서 조건 지표들이 얼마나 드문 축인지 (0~100)"
+                >
+                  희귀도 {m.rarity.toFixed(0)}
+                </span>
+              )}
+            </span>
             <span className={`text-lg font-bold tabular-nums ${returnColor(m.forwardReturns.d20)}`}>
               {pct(m.forwardReturns.d20)}
               <span className="ml-1 text-xs font-normal text-muted">20일</span>
@@ -49,7 +59,9 @@ export default function MatchList({ matches }: { matches: MatchRow[] }) {
           </div>
 
           {m.clusterSize && m.clusterSize > 1 ? (
-            <p className="mt-2 text-xs text-muted">연속 {m.clusterSize}일을 하나로 묶음</p>
+            <p className="mt-2 text-xs text-muted">
+              {m.clusterStart} ~ {m.clusterEnd} {m.clusterSize}일을 한 국면으로 묶고 이 날을 대표로 남김
+            </p>
           ) : null}
         </li>
       ))}

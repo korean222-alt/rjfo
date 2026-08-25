@@ -28,8 +28,8 @@ export function loadAnalysis(): AnalysisPayload | null {
     const raw = sessionStorage.getItem(ANALYSIS_KEY);
     if (!raw) return null;
     const payload = JSON.parse(raw) as AnalysisPayload;
-    // 배포 전에 저장된 결과에는 발화 규칙 필드가 없다. 화면이 죽는 대신 버린다.
-    if (!payload?.result?.trigger || typeof payload.result.rawMatchCount !== "number") {
+    // 배포 전에 저장된 결과에는 신호 정리 필드가 없다. 화면이 죽는 대신 버린다.
+    if (!payload?.result?.signalRule || typeof payload.result.rawMatchCount !== "number") {
       sessionStorage.removeItem(ANALYSIS_KEY);
       return null;
     }
@@ -81,5 +81,43 @@ export function loadClientBars(ticker: string): unknown | null {
     return saved.ticker === ticker && saved.bars ? saved.bars : null;
   } catch {
     return null;
+  }
+}
+
+// ── 이동평균선 설정 ─────────────────────────────────────────────────
+// 골든/데드크로스에 쓸 기간. 사용자가 정하는 값이라 브라우저에 오래 보관한다.
+const MA_KEY = "volume-analyzer:ma";
+
+export type MaSettings = {
+  enabled: boolean;
+  fast: number;
+  slow: number;
+};
+
+export const DEFAULT_MA: MaSettings = { enabled: true, fast: 20, slow: 60 };
+
+export function saveMaSettings(settings: MaSettings): void {
+  try {
+    localStorage.setItem(MA_KEY, JSON.stringify(settings));
+  } catch {
+    // 저장이 막혀도 차트는 그대로 그려진다.
+  }
+}
+
+export function loadMaSettings(): MaSettings {
+  try {
+    const raw = localStorage.getItem(MA_KEY);
+    if (!raw) return DEFAULT_MA;
+    const saved = JSON.parse(raw) as Partial<MaSettings>;
+    const fast = Number(saved.fast);
+    const slow = Number(saved.slow);
+    if (!isFinite(fast) || !isFinite(slow)) return DEFAULT_MA;
+    return {
+      enabled: saved.enabled !== false,
+      fast: Math.round(fast),
+      slow: Math.round(slow),
+    };
+  } catch {
+    return DEFAULT_MA;
   }
 }

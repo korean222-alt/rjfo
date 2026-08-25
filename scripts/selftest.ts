@@ -7,9 +7,11 @@
  *  2) 본 구현과 다르게 짠 naive 구현과 비교
  */
 import { enrich } from "../lib/indicators";
-import { applyFilter, clusterIndices, enforceMinGap } from "../lib/filter";
-import { analyze, forwardReturn, maxForwardReturn, resolveTrigger } from "../lib/stats";
-import { PRESET_CHIPS, PRESET_CONDITIONS, PRESET_TRIGGERS } from "../lib/presets";
+import { applyFilter, clusterIndices } from "../lib/filter";
+import { analyze, forwardReturn, maxForwardReturn, resolveSignalRule } from "../lib/stats";
+import { PRESET_CHIPS, PRESET_CONDITIONS, PRESET_SIGNAL_RULES } from "../lib/presets";
+import { computeRarity } from "../lib/rarity";
+import { detectMaCrosses, movingAverage } from "../lib/ma-cross";
 import { validateSpec } from "../lib/validate-spec";
 import type { Bar, FilterSpec, PresetName } from "../types";
 
@@ -131,11 +133,41 @@ console.log("\n[3] 전방 수익률");
   assert(forwardReturn(e, 119, 20) === null, "미래 봉 부족 시 null");
 }
 
-console.log("\n[4] 클러스터링");
+console.log("\n[4] 국면 묶기");
 {
-  const { kept, sizes } = clusterIndices([10, 11, 12, 30, 45, 46]);
-  assert(JSON.stringify(kept) === "[10,30,45]", "연속일 병합 → 첫날만 유지");
-  assert(JSON.stringify(sizes) === "[3,1,2]", "클러스터 크기 [3,1,2]");
+  // 희귀도가 없으면 첫날을 대표로 (예전 동작)
+  const plain = clusterIndices([10, 11, 12, 30, 45, 46]);
+  assert(
+    JSON.stringify(plain.map((c) => c.index)) === "[10,30,45]",
+    "희귀도 없으면 국면 첫날을 대표로",
+  );
+  assert(JSON.stringify(plain.map((c) => c.size)) === "[3,1,2]", "국면 크기 [3,1,2]");
+
+  // 희귀도를 주면 국면에서 가장 드문 날을 대표로 — 여기가 시간 간격 방식과 갈리는 지점이다.
+  const rarity: (number | null)[] = new Array(50).fill(0);
+  rarity[10] = 40;
+  rarity[11] = 95; // 국면 한가운데가 제일 강한 날
+  rarity[12] = 50;
+  rarity[45] = 30;
+  rarity[46] = 88;
+  const picked = clusterIndices([10, 11, 12, 30, 45, 46], 1, rarity);
+  assert(
+    JSON.stringify(picked.map((c) => c.index)) === "[11,30,46]",
+    "국면 대표일 = 가장 희귀한 날 (중요한 날이 잘려나가지 않음)",
+  );
+  assert(
+    JSON.stringify(picked.map((c) => c.start)) === "[10,30,45]" &&
+      JSON.stringify(picked.map((c) => c.end)) === "[12,30,46]",
+    "대표일과 별개로 국면의 시작·끝을 함께 보고",
+  );
+
+  // pick: "first"면 희귀도가 있어도 첫날
+  const first = clusterIndices([10, 11, 12], 1, rarity, "first");
+  assert(first[0].index === 10, 'pick "first" → 가장 이른 날을 대표로');
+
+  // gap을 넓히면 하루이틀 끊긴 것도 같은 국면
+  const wide = clusterIndices([10, 13, 16, 40], 3, rarity);
+  assert(wide.length === 2, "gap 3 → 3일 간격으로 이어진 날들을 한 국면으로");
 }
 
 console.log("\n[5] baseline 불변식");
@@ -217,8 +249,8 @@ console.log("\n[7] 빠른 신호 프리셋");
     "모든 빠른 신호가 하나 이상의 유효 조건을 가짐",
   );
   assert(
-    expected.every((name) => PRESET_TRIGGERS[name] != null),
-    "모든 프리셋에 발화 규칙이 정의됨",
+    expected.every((name) => PRESET_SIGNAL_RULES[name] != null),
+    "모든 프리셋에 신호 정리 규칙이 정의됨",
   );
   assert(
     expected.every((name) => PRESET_CHIPS.some((chip) => chip.preset === name)),
@@ -263,17 +295,25 @@ console.log("\n[7] 빠른 신호 프리셋");
     "누적 매집에 거래량 베이스·20일선 이격도 조건 추가",
   );
   assert(
-    PRESET_TRIGGERS.accumulation.fresh_only && PRESET_TRIGGERS.accumulation.min_gap_days === 20,
-    "누적 매집 = 진입 첫날만 · 최소 간격 20거래일",
+    PRESET_SIGNAL_RULES.accumulation.top_pct === 30 &&
+      PRESET_SIGNAL_RULES.accumulation.cluster_gap === 5,
+    "누적 매집 = 희귀도 상위 30% · 국면 gap 5일",
   );
   assert(
-    PRESET_TRIGGERS.stealth_accumulation.fresh_only &&
-      PRESET_TRIGGERS.flow_improvement.fresh_only,
-    "상태 지표 기반 프리셋은 전부 fresh_only",
+    PRESET_SIGNAL_RULES.stealth_accumulation.top_pct <= 30 &&
+      PRESET_SIGNAL_RULES.flow_improvement.top_pct <= 30,
+    "상태 지표 기반 프리셋은 순위 컷을 좁게",
   );
   assert(
-    !PRESET_TRIGGERS.absorption.fresh_only && !PRESET_TRIGGERS.strong_breakout.fresh_only,
-    "이벤트 지표 기반 프리셋은 fresh_only를 걸지 않음",
+    PRESET_SIGNAL_RULES.absorption.top_pct === 100 &&
+      PRESET_SIGNAL_RULES.strong_breakout.cluster_gap === 1,
+    "이벤트 지표 기반 프리셋은 순위 컷 없이 연속일만 묶음",
+  );
+  assert(
+    (Object.keys(PRESET_SIGNAL_RULES) as PresetName[]).every(
+      (n) => PRESET_SIGNAL_RULES[n].top_pct >= 1 && PRESET_SIGNAL_RULES[n].top_pct <= 100,
+    ),
+    "순위 컷은 전부 1~100 범위",
   );
   assert(
     PRESET_CONDITIONS.flow_improvement[0].value === 1.6 &&
@@ -336,67 +376,118 @@ console.log("\n[8] 새 파생 지표");
   assert(e[58].obv_slope_60d === null, "60봉 미만 obv_slope_60d = null");
 }
 
-console.log("\n[9] 발화 규칙 (첫 진입만 · 최소 간격)");
+console.log("\n[9] 희귀도");
 {
+  const bars = fixture();
+  const e = enrich(bars);
+
+  // 거래량은 80번 봉만 5배. volume_ratio_20d가 클수록 드문 조건이므로
+  // 80번 봉의 희귀도가 최대(100)여야 한다.
+  const spec: FilterSpec = {
+    conditions: [{ metric: "volume_ratio_20d", op: ">=", value: 1 }],
+    logic: "AND",
+    preset: null,
+    interpretation: "",
+    confidence: "high",
+  };
+  const rarity = computeRarity(e, spec);
+  approx(rarity[80], 100, 1e-9, "가장 거래량이 큰 날의 희귀도 = 100");
+  assert(rarity[18] === null, "워밍업 구간 희귀도 = null");
   assert(
-    JSON.stringify(enforceMinGap([0, 3, 7, 21, 22, 40], 10)) === "[0,21,40]",
-    "최소 간격 10일 → 붙은 신호 제거",
-  );
-  assert(
-    JSON.stringify(enforceMinGap([0, 3, 7], 0)) === "[0,3,7]",
-    "간격 0이면 그대로 통과",
+    (rarity[80] as number) > (rarity[100] as number),
+    "스파이크일이 평범한 날보다 희귀도가 높음",
   );
 
-  // 상태 지표를 흉내낸 픽스처: 거래량이 40~79번 봉에서 계속 높게 유지된다.
+  // 방향 뒤집기: `<=` 조건이면 값이 작을수록 드물다
+  const inverted = computeRarity(e, { ...spec, conditions: [{ metric: "volume_ratio_20d", op: "<=", value: 9 }] });
+  assert(
+    (inverted[80] as number) < (inverted[100] as number),
+    "`<=` 조건에서는 값이 작은 날이 더 희귀",
+  );
+
+  // naive 대조 — 전체 분포에서 자기 이하인 값의 비율
+  const values = e.map((b) => b.volume_ratio_20d).filter((v): v is number => v != null);
+  const target = e[100].volume_ratio_20d as number;
+  const naive = (values.filter((v) => v <= target).length / values.length) * 100;
+  approx(rarity[100], naive, 1e-9, "희귀도 백분위 (naive 대조)");
+}
+
+console.log("\n[10] 희귀도 순위로 신호 줄이기 (시간 간격 없이)");
+{
+  // 40~79번 봉이 통째로 조건을 만족하는 "국면"을 만들고, 그 한가운데(60번 봉)에
+  // 가장 강한 날을 심는다. 이 날이 절대 잘려선 안 되는 날이다.
+  //
+  // 조건 지표로 volume_ratio_20d 대신 raw volume을 쓴다. 전자는 "그날 값 ÷ 자기 20일 평균"이라
+  // 스파이크가 자기 분모를 밀어올려 국면을 스스로 끊어버린다.
   const bars: Bar[] = [];
   let close = 100;
   for (let i = 0; i < 120; i++) {
     const d = new Date(Date.UTC(2020, 0, 1 + i));
+    let volume = 1_000_000;
+    if (i >= 40 && i < 80) volume = 2_000_000 + (i % 10) * 100_000; // 국면 안에서도 편차를 준다
+    if (i === 60) volume = 12_000_000; // 국면 한가운데의 가장 강한 날
     bars.push({
       date: d.toISOString().slice(0, 10),
       open: close,
       high: close * 1.01,
       low: close * 0.99,
       close,
-      volume: i >= 40 && i < 80 ? 3_000_000 : 1_000_000,
-      // 40번 봉부터 거래량이 3배로 올라 20일 내내 조건이 참인 "국면"을 만든다
+      volume,
     });
     close *= 1.001;
   }
   const e = enrich(bars);
   const base = { logic: "AND" as const, preset: null, interpretation: "", confidence: "high" as const };
-  const conditions = [{ metric: "volume_ratio_20d" as const, op: ">=" as const, value: 1.5 }];
+  const conditions = [{ metric: "volume" as const, op: ">=" as const, value: 2_000_000 }];
+  const spikeDate = bars[60].date;
 
   const all = applyFilter(e, { ...base, conditions });
-  const fresh = applyFilter(e, { ...base, conditions, fresh_only: true });
-  assert(all.length >= 10, `발화 규칙 없으면 ${all.length}일 매칭 (국면 하나가 통째로 잡힘)`);
-  assert(fresh.length === 1, `fresh_only → 진입 첫날 1일만 (실제 ${fresh.length}일)`);
-  assert(fresh[0] === 40, "진입 첫날 = 40번 봉");
+  assert(all.length === 40, `정리 규칙 없으면 ${all.length}일 매칭 (국면이 통째로 잡힘)`);
 
-  // applyTrigger:false는 fresh_only를 무시하고 원본 매칭을 그대로 준다
-  const raw = applyFilter(e, { ...base, conditions, fresh_only: true }, { applyTrigger: false });
-  assert(raw.length === all.length, "applyTrigger:false → 원본 매칭 수 그대로");
-
-  // analyze가 규칙 적용 전/후를 함께 보고한다
-  const spec: FilterSpec = { ...base, conditions, fresh_only: true, min_gap_days: 20 };
-  const r = analyze("TEST", e, spec, { cluster: false });
-  assert(r.rawMatchCount === all.length, `rawMatchCount = ${all.length} (규칙 적용 전)`);
-  assert(r.stats.matchCount === 1, "규칙 적용 후 신호 1개");
-  assert(r.suppressedCount === all.length - 1, "suppressedCount = 억제된 신호 수");
-  assert(r.trigger.freshOnly && r.trigger.minGapDays === 20, "결과에 적용된 발화 규칙이 실림");
+  // 희귀도 순위만으로 신호를 줄인다 — 시간 간격은 쓰지 않는다.
+  const strict = analyze("TEST", e, { ...base, conditions, top_pct: 10 }, { cluster: false });
+  assert(strict.stats.matchCount === 4, `상위 10% → 40개 중 4개 (실제 ${strict.stats.matchCount})`);
   assert(
-    r.warnings.some((w) => w.includes("신호") && w.includes("정리했습니다")),
-    "억제 사실을 경고로 알림",
+    strict.matches.some((m) => m.date === spikeDate),
+    "가장 강한 날은 아무리 좁게 잘라도 살아남음",
+  );
+  assert(strict.rawMatchCount === all.length, "rawMatchCount = 정리 전 조건 충족일");
+  assert(strict.rankedOutCount === all.length - strict.stats.matchCount, "순위에서 밀린 신호 수 보고");
+
+  // 아무리 좁혀도 최소 1개는 남는다 (조건이 빡빡한 프리셋이 통째로 0개가 되지 않도록)
+  const tiny = analyze("TEST", e, { ...base, conditions, top_pct: 1 }, { cluster: false });
+  assert(tiny.stats.matchCount === 1, "상위 1%여도 최소 1개는 남음");
+  assert(tiny.matches[0].date === spikeDate, "그 1개는 가장 강한 날");
+
+  // 국면으로 묶어도 대표일은 국면에서 가장 드문 날 = 스파이크일
+  const clustered = analyze("TEST", e, { ...base, conditions, cluster_gap: 5 }, {});
+  assert(
+    clustered.matches.some((m) => m.date === spikeDate),
+    "국면으로 묶어도 대표일은 그 국면에서 가장 드문 날",
+  );
+  assert(clustered.stats.matchCount < all.length, "국면 묶기가 신호 수를 줄임");
+
+  // 대표일을 "first"로 바꾸면 스파이크일 대신 국면 첫날이 남는다 (선택지로만 제공)
+  const firstPick = analyze("TEST", e, { ...base, conditions, cluster_gap: 5, cluster_pick: "first" }, {});
+  assert(
+    firstPick.matches.every((m) => m.date !== spikeDate) &&
+      firstPick.matches.some((m) => m.date === bars[40].date),
+    'pick "first"는 국면 첫날을 남긴다 — 국면 한가운데의 가장 강한 날이 빠진다 (기본값이 "rarest"인 이유)',
   );
 
   // 규칙을 끄면 예전 동작 그대로
-  const off = analyze("TEST", e, { ...spec, fresh_only: false, min_gap_days: 0 }, { cluster: false });
+  const off = analyze("TEST", e, { ...base, conditions, top_pct: 100 }, { cluster: false });
   assert(off.stats.matchCount === all.length, "규칙을 끄면 전체 매칭 (하위 호환)");
+
+  // 희귀도가 결과에 실린다
+  assert(
+    off.matches.every((m) => m.rarity != null),
+    "모든 매칭 행에 희귀도가 실림",
+  );
 }
 
-console.log("\n[10] 프리셋 기본 발화 규칙 / 스펙 검증");
+console.log("\n[11] 프리셋 기본 규칙 / 스펙 검증");
 {
-  // 스펙에 명시가 없으면 프리셋 기본값을 쓴다
   const spec: FilterSpec = {
     conditions: PRESET_CONDITIONS.accumulation,
     logic: "AND",
@@ -404,37 +495,43 @@ console.log("\n[10] 프리셋 기본 발화 규칙 / 스펙 검증");
     interpretation: "",
     confidence: "high",
   };
-  const t = resolveTrigger(spec);
-  assert(t.freshOnly && t.minGapDays === 20, "프리셋 기본 발화 규칙 적용");
+  const rule = resolveSignalRule(spec);
+  assert(rule.topPct === 30 && rule.clusterGap === 5, "프리셋 기본 정리 규칙 적용");
+  assert(rule.clusterPick === "rarest", '대표일 기본값 = "rarest"');
 
-  // 사용자가 명시하면 그게 이긴다
-  const overridden = resolveTrigger({ ...spec, fresh_only: false, min_gap_days: 5 });
-  assert(!overridden.freshOnly && overridden.minGapDays === 5, "명시된 규칙이 프리셋 기본값을 덮어씀");
+  const overridden = resolveSignalRule({ ...spec, top_pct: 50, cluster_gap: 2, cluster_pick: "first" });
+  assert(
+    overridden.topPct === 50 && overridden.clusterGap === 2 && overridden.clusterPick === "first",
+    "명시된 규칙이 프리셋 기본값을 덮어씀",
+  );
 
-  // 프리셋이 없으면 규칙 없음 (예전 동작)
-  const none = resolveTrigger({ ...spec, preset: null });
-  assert(!none.freshOnly && none.minGapDays === 0, "프리셋 없으면 규칙 없음");
+  const none = resolveSignalRule({ ...spec, preset: null });
+  assert(none.topPct === 100 && none.clusterGap === 1, "프리셋 없으면 규칙 없음");
 
-  // validateSpec이 발화 규칙을 통과시키고 상한을 건다
+  // validateSpec이 정리 규칙을 통과시키고 범위를 건다
   const v = validateSpec({
     conditions: [{ metric: "volume_ratio_20d", op: ">=", value: 2 }],
     logic: "AND",
-    fresh_only: true,
-    min_gap_days: 999,
+    top_pct: 999,
+    cluster_gap: 999,
+    cluster_pick: "first",
     interpretation: "테스트",
     confidence: "high",
   });
-  assert(v.fresh_only === true, "validateSpec: fresh_only 통과");
-  assert(v.min_gap_days === 120, "validateSpec: min_gap_days 상한 120 적용");
+  assert(v.top_pct === 100, "validateSpec: top_pct 상한 100");
+  assert(v.cluster_gap === 20, "validateSpec: cluster_gap 상한 20");
+  assert(v.cluster_pick === "first", "validateSpec: cluster_pick 통과");
 
   const v2 = validateSpec({
     conditions: [{ metric: "volume_ratio_20d", op: ">=", value: 2 }],
     logic: "AND",
-    min_gap_days: "이상한값",
+    top_pct: "이상한값",
+    cluster_pick: "아무거나",
     interpretation: "테스트",
     confidence: "high",
   });
-  assert(v2.min_gap_days === undefined, "validateSpec: 숫자가 아니면 버리고 프리셋 기본값에 맡김");
+  assert(v2.top_pct === undefined, "validateSpec: 숫자가 아니면 버리고 프리셋 기본값에 맡김");
+  assert(v2.cluster_pick === undefined, "validateSpec: 알 수 없는 cluster_pick은 버림");
 
   // 새 metric이 실제로 필터에서 동작하는지
   const bars = fixture();
@@ -447,6 +544,62 @@ console.log("\n[10] 프리셋 기본 발화 규칙 / 스펙 검증");
     confidence: "high",
   });
   assert(hit.length === bars.length - 19, "close_vs_sma20_pct 조건은 워밍업 이후 봉만 통과");
+}
+
+console.log("\n[12] 이동평균선 골든/데드크로스");
+{
+  // 단순 이동평균 — naive 대조
+  const values = [1, 2, 3, 4, 5, 6, 7, 8];
+  const ma3 = movingAverage(values, 3);
+  assert(ma3[0] === null && ma3[1] === null, "구간이 모자라는 앞쪽은 null");
+  approx(ma3[2], 2, 1e-12, "MA(3) 첫 값 = (1+2+3)/3");
+  approx(ma3[7], 7, 1e-12, "MA(3) 마지막 값 = (6+7+8)/3");
+  assert(movingAverage(values, 20).every((v) => v === null), "봉보다 긴 기간이면 전부 null");
+
+  // 상승 → 하락 → 상승. MA20 워밍업(20봉)이 끝난 뒤에 데드크로스와 골든크로스가 한 번씩.
+  // (처음부터 하락하는 시계열은 관측이 시작될 때 이미 데드크로스 상태라 교차로 셀 수 없다.)
+  const vshape: Pick<Bar, "date" | "close">[] = [];
+  for (let i = 0; i < 120; i++) {
+    const close = i < 30 ? 100 + i * 2 : i < 70 ? 160 - (i - 30) * 2 : 80 + (i - 70) * 2;
+    vshape.push({ date: new Date(Date.UTC(2021, 0, 1 + i)).toISOString().slice(0, 10), close });
+  }
+  const crosses = detectMaCrosses(vshape, 5, 20);
+  assert(crosses.length === 2, `상승→하락→상승 → 교차 2회 (실제 ${crosses.length}회)`);
+  assert(crosses[0].type === "dead", "먼저 데드크로스");
+  assert(crosses[1].type === "golden", "그 다음 골든크로스");
+  assert(crosses[0].date < crosses[1].date, "교차는 시간순으로 나온다");
+  assert(
+    crosses.every((c) => c.fastValue !== c.slowValue),
+    "교차 시점에는 두 선의 값이 다르다 (맞닿기만 한 봉은 제외)",
+  );
+
+  // 교차일 이후 20거래일 수익률
+  const golden = crosses[1];
+  const gi = vshape.findIndex((b) => b.date === golden.date);
+  if (gi + 20 < vshape.length) {
+    approx(
+      golden.forwardReturn20d,
+      ((vshape[gi + 20].close - vshape[gi].close) / vshape[gi].close) * 100,
+      1e-9,
+      "골든크로스 이후 20일 수익률 (naive 대조)",
+    );
+  }
+
+  // 단조 상승이면 교차가 없다
+  const rising = vshape.map((b, i) => ({ date: b.date, close: 100 + i }));
+  assert(detectMaCrosses(rising, 5, 20).length === 0, "단조 상승 시계열에는 교차 없음");
+
+  // 잘못된 기간은 안전하게 빈 배열
+  assert(detectMaCrosses(vshape, 20, 5).length === 0, "단기 ≥ 장기면 교차를 계산하지 않음");
+  assert(detectMaCrosses(vshape, 5, 5).length === 0, "두 기간이 같으면 교차 없음");
+  assert(detectMaCrosses([], 5, 20).length === 0, "빈 시계열도 안전");
+
+  // 두 선이 정확히 겹치기만 하고 되돌아가는 경우를 교차로 세지 않는지
+  const touch: Pick<Bar, "date" | "close">[] = [];
+  for (let i = 0; i < 60; i++) {
+    touch.push({ date: new Date(Date.UTC(2022, 0, 1 + i)).toISOString().slice(0, 10), close: 100 });
+  }
+  assert(detectMaCrosses(touch, 5, 20).length === 0, "완전 평탄(두 선이 겹침) → 교차 0회");
 }
 
 console.log(

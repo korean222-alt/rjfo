@@ -1,6 +1,7 @@
 import type { Condition, EnrichedBar, FilterSpec, Metric } from "@/types";
 
-function metricValue(bar: EnrichedBar, metric: Metric): number | null {
+/** 지표 이름 → 그 봉의 값. 희귀도 계산에서도 같은 표를 쓴다. */
+export function metricValue(bar: EnrichedBar, metric: Metric): number | null {
   switch (metric) {
     case "volume":
       return bar.volume;
@@ -73,79 +74,79 @@ function passesConditions(bar: EnrichedBar, spec: FilterSpec): boolean {
     : conditions.every((c) => testCondition(bar, c));
 }
 
-export type FilterOptions = {
-  /**
-   * false면 spec.fresh_only를 무시하고 조건 충족일을 전부 반환한다.
-   * (발화 규칙 적용 전 원본 매칭 수를 세는 용도)
-   */
-  applyTrigger?: boolean;
+/** 조건(+기간)을 만족하는 봉의 인덱스를 반환. lookahead는 stats 단계에서 적용한다. */
+export function applyFilter(bars: EnrichedBar[], spec: FilterSpec): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < bars.length; i++) {
+    if (!inPeriod(bars[i].date, spec.period)) continue;
+    if (passesConditions(bars[i], spec)) out.push(i);
+  }
+  return out;
+}
+
+export type Cluster = {
+  /** 이 국면을 대표하는 봉의 인덱스 */
+  index: number;
+  /** 국면에 묶인 거래일 수 */
+  size: number;
+  /** 국면의 첫 날 / 마지막 날 인덱스 */
+  start: number;
+  end: number;
 };
 
+export type ClusterPick = "rarest" | "first";
+
 /**
- * 조건(+기간)을 만족하는 봉의 인덱스를 반환. lookahead는 stats 단계에서 적용한다.
+ * 붙어 있는 매칭일을 하나의 "국면"으로 묶는다.
  *
- * spec.fresh_only가 켜져 있으면 "직전 거래일에는 조건을 만족하지 않았던 날"만 남긴다.
- * up_down_vol_ratio_20d나 obv_slope_20d처럼 20일 롤링 창을 쓰는 상태 지표는
- * 한 번 조건에 들어가면 수십 일 내내 참이라, 이게 없으면 같은 국면 하나가
- * 신호 수십 개로 부풀려진다.
- */
-export function applyFilter(
-  bars: EnrichedBar[],
-  spec: FilterSpec,
-  options: FilterOptions = {},
-): number[] {
-  const freshOnly = options.applyTrigger === false ? false : Boolean(spec.fresh_only);
-  const out: number[] = [];
-
-  let prevPass = false;
-  for (let i = 0; i < bars.length; i++) {
-    const bar = bars[i];
-    const pass = passesConditions(bar, spec);
-
-    // 기간 밖이어도 "직전 상태"는 이어져야 진입 첫날 판정이 흔들리지 않는다.
-    if (pass && !(freshOnly && prevPass) && inPeriod(bar.date, spec.period)) {
-      out.push(i);
-    }
-    prevPass = pass;
-  }
-  return out;
-}
-
-/**
- * 직전 신호 이후 minGap 거래일이 지나지 않은 신호를 버린다.
- * 상태 지표가 임계값 근처에서 껐다 켜졌다 하며 같은 국면을 여러 번 발화하는 걸 막는다.
- */
-export function enforceMinGap(indices: number[], minGap: number): number[] {
-  if (!(minGap > 0)) return indices;
-  const out: number[] = [];
-  let last: number | null = null;
-  for (const idx of indices) {
-    if (last != null && idx - last < minGap) continue;
-    out.push(idx);
-    last = idx;
-  }
-  return out;
-}
-
-/**
- * 연속된(또는 gap 이내로 붙어있는) 매칭일을 클러스터로 묶어 중복 카운트를 막는다.
- * 각 클러스터의 첫 날만 남긴다.
+ * 상태 지표(20일 롤링)는 한 국면이 통째로 조건을 만족해 신호 수십 개로 부풀려진다.
+ * 그렇다고 시간 간격으로 솎아내면 정작 그 국면에서 제일 중요한 날이 잘려나간다.
+ * 그래서 국면은 묶되, 대표일을 **희귀도가 가장 높은 날**로 고른다 — 몇 개로 줄이든
+ * 남는 건 항상 그 국면에서 가장 강한 날이다.
+ *
+ * pick이 "first"면 국면의 첫 날(= 가장 이른 진입 시점)을 대표로 삼는다.
+ *
+ * @param gap  이만큼 이내로 떨어진 매칭일은 같은 국면으로 본다 (1 = 연속일만)
+ * @param rarity  봉별 희귀도. 없으면 첫 날을 대표로 쓴다.
  */
 export function clusterIndices(
   indices: number[],
   gap = 1,
-): { kept: number[]; sizes: number[] } {
-  const kept: number[] = [];
-  const sizes: number[] = [];
-  for (const idx of indices) {
-    const last = kept.length ? kept[kept.length - 1] : null;
-    const lastEnd = last == null ? null : last + sizes[sizes.length - 1] - 1;
-    if (lastEnd != null && idx - lastEnd <= gap) {
-      sizes[sizes.length - 1] = idx - last! + 1;
-    } else {
-      kept.push(idx);
-      sizes.push(1);
+  rarity?: (number | null)[],
+  pick: ClusterPick = "rarest",
+): Cluster[] {
+  if (!indices.length) return [];
+
+  // 1) 먼저 gap 기준으로 국면 경계를 나눈다.
+  const groups: number[][] = [];
+  let current: number[] = [indices[0]];
+  for (let k = 1; k < indices.length; k++) {
+    const idx = indices[k];
+    if (idx - current[current.length - 1] <= gap) current.push(idx);
+    else {
+      groups.push(current);
+      current = [idx];
     }
   }
-  return { kept, sizes };
+  groups.push(current);
+
+  // 2) 각 국면의 대표일을 고른다.
+  return groups.map((group) => {
+    const start = group[0];
+    const end = group[group.length - 1];
+    let index = start;
+
+    if (pick === "rarest" && rarity) {
+      let best = -Infinity;
+      for (const i of group) {
+        const r = rarity[i];
+        if (r != null && r > best) {
+          best = r;
+          index = i;
+        }
+      }
+    }
+
+    return { index, size: end - start + 1, start, end };
+  });
 }

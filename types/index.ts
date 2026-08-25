@@ -80,8 +80,8 @@ export type PresetName =
   | "base_breakout"
   | "pullback_support";
 
-/** 신호 발화 규칙 상한 (스펙 검증에서 잘라낸다). */
-export const MAX_MIN_GAP_DAYS = 120;
+/** 국면 묶기 gap 상한 (스펙 검증에서 잘라낸다). */
+export const MAX_CLUSTER_GAP = 20;
 
 export type FilterSpec = {
   conditions: Condition[];
@@ -93,12 +93,17 @@ export type FilterSpec = {
   period?: { start?: string; end?: string };
   preset?: PresetName | null;
   /**
-   * 상태 지표(20일 롤링)는 한 번 조건에 들어가면 수십 일 내내 참이라 신호가 폭주한다.
-   * true면 "직전 거래일에는 조건을 만족하지 않았던 날" = 상태 진입 첫날만 신호로 센다.
+   * 희귀도 상위 몇 %만 신호로 남길지 (1~100, 100 = 전부).
+   *
+   * 절대 임계값이 아니라 순위로 자르는 이유: 조건마다 지표 조합이 달라 희귀도의
+   * 절대 수준이 비교되지 않는다(가드 성격의 조건이 섞이면 평균이 통째로 내려간다).
+   * 순위로 자르면 어떤 조건에서도 "가장 드문 것부터" 남고, 신호가 0개가 되지 않는다.
    */
-  fresh_only?: boolean;
-  /** 직전 신호 이후 최소 N거래일이 지나야 다음 신호를 인정한다 (재발화 억제). */
-  min_gap_days?: number;
+  top_pct?: number;
+  /** 이만큼 이내로 붙은 매칭일을 한 국면으로 묶는다 (1 = 연속일만, 상한 20). */
+  cluster_gap?: number;
+  /** 국면 대표일을 고르는 방식. "rarest"(기본) = 가장 희귀한 날, "first" = 가장 이른 날. */
+  cluster_pick?: "rarest" | "first";
   interpretation: string;
   confidence: "high" | "low";
 };
@@ -120,6 +125,11 @@ export type MatchRow = {
   forwardReturns: ForwardReturns;
   maxForwardReturn20d: number | null;
   clusterSize?: number; // 클러스터 병합 시 묶인 날짜 수
+  /** 국면에 묶인 첫 날 / 마지막 날 (대표일과 다를 수 있다) */
+  clusterStart?: string;
+  clusterEnd?: string;
+  /** 희귀도 0~100. 조건 지표들이 이 종목 전체 분포에서 얼마나 드문 축인지. */
+  rarity: number | null;
 };
 
 export type StatBlock = {
@@ -144,9 +154,11 @@ export type AnalysisResult = {
   warnings: string[];
   lookaheadUsed: boolean;
   clustered: boolean;
-  /** 발화 규칙 적용 전, 조건만 만족한 거래일 수 */
+  /** 신호 정리 전, 조건만 만족한 거래일 수 */
   rawMatchCount: number;
-  /** 발화 규칙(첫 진입만·최소 간격·연속일 묶기)으로 걸러낸 신호 수 */
+  /** 국면 묶기·희귀도 하한으로 정리된 거래일 수 */
   suppressedCount: number;
-  trigger: { freshOnly: boolean; minGapDays: number };
+  /** 국면 묶기까지 마친 뒤 희귀도 순위에서 밀려 빠진 신호 수 */
+  rankedOutCount: number;
+  signalRule: { topPct: number; clusterGap: number; clusterPick: "rarest" | "first" };
 };

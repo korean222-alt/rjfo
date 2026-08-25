@@ -1,4 +1,4 @@
-import { MAX_MIN_GAP_DAYS, METRICS, OPS, type FilterSpec, type Metric, type Op } from "@/types";
+import { MAX_CLUSTER_GAP, METRICS, OPS, type FilterSpec, type Metric, type Op } from "@/types";
 import { PRESET_CONDITIONS } from "./presets";
 
 export class SpecValidationError extends Error {}
@@ -60,16 +60,21 @@ export function validateSpec(raw: unknown): FilterSpec {
     if (start || end) period = { start, end };
   }
 
-  // 발화 규칙 — 명시되지 않으면 undefined로 두고 프리셋 기본값에 맡긴다.
-  const fresh_only = typeof o.fresh_only === "boolean" ? o.fresh_only : undefined;
-
-  let min_gap_days: number | undefined;
-  if (o.min_gap_days !== undefined && o.min_gap_days !== null) {
-    const g = Number(o.min_gap_days);
-    if (isFinite(g) && g >= 0) {
-      min_gap_days = Math.min(Math.round(g), MAX_MIN_GAP_DAYS);
-    }
+  // 신호 정리 규칙 — 명시되지 않으면 undefined로 두고 프리셋 기본값에 맡긴다.
+  let top_pct: number | undefined;
+  if (o.top_pct !== undefined && o.top_pct !== null) {
+    const t = Number(o.top_pct);
+    if (isFinite(t)) top_pct = Math.min(100, Math.max(1, Math.round(t)));
   }
+
+  let cluster_gap: number | undefined;
+  if (o.cluster_gap !== undefined && o.cluster_gap !== null) {
+    const g = Number(o.cluster_gap);
+    if (isFinite(g) && g >= 1) cluster_gap = Math.min(Math.round(g), MAX_CLUSTER_GAP);
+  }
+
+  const cluster_pick =
+    o.cluster_pick === "first" || o.cluster_pick === "rarest" ? o.cluster_pick : undefined;
 
   return {
     conditions: finalConditions,
@@ -77,8 +82,9 @@ export function validateSpec(raw: unknown): FilterSpec {
     lookahead,
     period,
     preset,
-    fresh_only,
-    min_gap_days,
+    top_pct,
+    cluster_gap,
+    cluster_pick,
     interpretation:
       typeof o.interpretation === "string" && o.interpretation.trim()
         ? o.interpretation.trim()

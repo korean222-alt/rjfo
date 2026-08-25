@@ -6,8 +6,9 @@ import type {
   MatchRow,
   StatBlock,
 } from "@/types";
-import { applyFilter, clusterIndices, enforceMinGap } from "./filter";
-import { PRESET_TRIGGERS } from "./presets";
+import { applyFilter, clusterIndices } from "./filter";
+import { PRESET_SIGNAL_RULES } from "./presets";
+import { computeRarity } from "./rarity";
 
 export const HIT_THRESHOLD_PCT = 10; // "성공" 정의: 20거래일 안에 +10% 이상
 export const HORIZON = 20;
@@ -86,14 +87,15 @@ export type AnalyzeOptions = {
 };
 
 /**
- * 스펙에 발화 규칙이 명시돼 있으면 그걸 쓰고, 없으면 프리셋 기본값을 쓴다.
- * 프리셋도 없으면 규칙 없음(예전 동작 그대로).
+ * 스펙에 신호 정리 규칙이 명시돼 있으면 그걸 쓰고, 없으면 프리셋 기본값을 쓴다.
+ * 프리셋도 없으면 규칙 없음(조건을 만족한 날이 전부 신호).
  */
-export function resolveTrigger(spec: FilterSpec): { freshOnly: boolean; minGapDays: number } {
-  const preset = spec.preset ? PRESET_TRIGGERS[spec.preset] : undefined;
+export function resolveSignalRule(spec: FilterSpec): AnalysisResult["signalRule"] {
+  const preset = spec.preset ? PRESET_SIGNAL_RULES[spec.preset] : undefined;
   return {
-    freshOnly: spec.fresh_only ?? preset?.fresh_only ?? false,
-    minGapDays: spec.min_gap_days ?? preset?.min_gap_days ?? 0,
+    topPct: spec.top_pct ?? preset?.top_pct ?? 100,
+    clusterGap: spec.cluster_gap ?? preset?.cluster_gap ?? 1,
+    clusterPick: spec.cluster_pick ?? "rarest",
   };
 }
 
@@ -111,13 +113,12 @@ export function analyze(
 ): AnalysisResult {
   const cluster = options.cluster !== false;
   const warnings: string[] = [];
-  const trigger = resolveTrigger(spec);
+  const rule = resolveSignalRule(spec);
 
-  // 발화 규칙을 적용한 스펙 / 적용하지 않은 원본, 두 갈래를 함께 센다.
-  // "조건은 120일 충족했는데 신호는 6개"를 화면에서 그대로 보여주기 위해서다.
-  const effectiveSpec: FilterSpec = { ...spec, fresh_only: trigger.freshOnly };
-  const rawIndices = applyFilter(bars, spec, { applyTrigger: false });
-  let indices = applyFilter(bars, effectiveSpec);
+  // 희귀도는 전체 봉 기준으로 한 번만 매긴다 (같은 잣대를 모든 날에 적용하기 위해).
+  const rarity = computeRarity(bars, spec);
+
+  const rawIndices = applyFilter(bars, spec);
 
   // lookahead: "급등 직전" 류 — 미래 창 안에서 목표 수익률을 달성한 날만 남긴다.
   const lookahead = spec.lookahead;
@@ -126,25 +127,36 @@ export function analyze(
     const mx = maxForwardReturn(bars, i, lookahead.days);
     return mx != null && mx >= lookahead.min_return_pct;
   };
-  const rawMatchCount = rawIndices.filter(passesLookahead).length;
-  indices = indices.filter(passesLookahead);
+  const afterLookahead = rawIndices.filter(passesLookahead);
+  const rawMatchCount = afterLookahead.length;
 
-  let sizes: number[] = indices.map(() => 1);
+  // 국면 묶기 — 붙어 있는 매칭일을 하나로 묶되 대표일은 그 국면에서 가장 희귀한 날로 고른다.
+  // 국면 안 어느 날이 제일 강하든 그 날이 살아남는다.
+  let clusters = afterLookahead.map((i) => ({ index: i, size: 1, start: i, end: i }));
   if (cluster) {
-    const c = clusterIndices(indices);
-    indices = c.kept;
-    sizes = c.sizes;
+    clusters = clusterIndices(afterLookahead, rule.clusterGap, rarity, rule.clusterPick);
   }
 
-  // 최소 간격: 상태 지표가 임계값 근처에서 껌뻑이며 같은 국면을 여러 번 발화하는 걸 막는다.
-  if (trigger.minGapDays > 0) {
-    const kept = enforceMinGap(indices, trigger.minGapDays);
-    const keptSet = new Set(kept);
-    sizes = sizes.filter((_, k) => keptSet.has(indices[k]));
-    indices = kept;
+  // 희귀도 순위 컷 — 드문 것부터 상위 몇 %만 남긴다.
+  // 시간 간격으로 솎아내지 않으므로, 강한 신호가 며칠을 연달아 떠도 전부 순위 위에 남는다.
+  const beforeRank = clusters.length;
+  if (rule.topPct < 100 && clusters.length > 1) {
+    const keepCount = Math.max(1, Math.ceil(clusters.length * (rule.topPct / 100)));
+    const ranked = [...clusters].sort((a, b) => {
+      const ra = rarity[a.index] ?? -Infinity;
+      const rb = rarity[b.index] ?? -Infinity;
+      if (rb !== ra) return rb - ra;
+      return a.index - b.index; // 동점이면 이른 날 우선 (결과가 매번 같도록)
+    });
+    const kept = new Set(ranked.slice(0, keepCount).map((c) => c.index));
+    clusters = clusters.filter((c) => kept.has(c.index));
   }
+  const rankedOutCount = beforeRank - clusters.length;
 
-  const matches: MatchRow[] = indices.map((i, k) => {
+  const indices = clusters.map((c) => c.index);
+
+  const matches: MatchRow[] = clusters.map((c, k) => {
+    const i = c.index;
     const b = bars[i];
     const forwardReturns: ForwardReturns = {
       d5: forwardReturn(bars, i, 5),
@@ -160,7 +172,10 @@ export function analyze(
       close: b.close,
       forwardReturns,
       maxForwardReturn20d: maxForwardReturn(bars, i, HORIZON),
-      clusterSize: sizes[k],
+      clusterSize: c.size,
+      clusterStart: bars[c.start].date,
+      clusterEnd: bars[c.end].date,
+      rarity: rarity[i],
     };
   });
 
@@ -176,22 +191,25 @@ export function analyze(
   const suppressedCount = Math.max(0, rawMatchCount - matches.length);
 
   if (matches.length === 0) {
-    warnings.push(
-      rawMatchCount > 0
-        ? `조건은 ${rawMatchCount}일 충족했지만 발화 규칙(첫 진입만 · 최소 간격 ${trigger.minGapDays}일)을 통과한 신호가 없습니다. 아래에서 규칙을 완화해 보세요.`
-        : "조건에 맞는 날이 없습니다. 조건을 완화해 보세요.",
-    );
+    warnings.push("조건에 맞는 날이 없습니다. 조건을 완화해 보세요.");
   } else if (matches.length < 10) {
     warnings.push("표본이 너무 적어 통계적 의미 없음 (매칭 10일 미만).");
   }
 
   if (suppressedCount > 0) {
     const parts: string[] = [];
-    if (trigger.freshOnly) parts.push("첫 진입만");
-    if (trigger.minGapDays > 0) parts.push(`최소 간격 ${trigger.minGapDays}일`);
-    if (cluster) parts.push("연속일 묶기");
+    if (cluster) {
+      parts.push(
+        `붙어 있는 날을 국면으로 묶어(gap ${rule.clusterGap}일) ` +
+          (rule.clusterPick === "rarest"
+            ? "국면마다 가장 희귀한 날만 남김"
+            : "국면마다 가장 이른 날만 남김"),
+      );
+    }
+    if (rankedOutCount > 0) parts.push(`희귀도 상위 ${rule.topPct}%만 남겨 ${rankedOutCount}개 제외`);
     warnings.push(
-      `조건 충족 ${rawMatchCount}일 중 ${suppressedCount}일을 ${parts.join(" · ")} 규칙으로 묶어 신호 ${matches.length}개로 정리했습니다.`,
+      `조건 충족 ${rawMatchCount}일 → 신호 ${matches.length}개. ${parts.join(" · ")}. ` +
+        "시간 간격으로 자르지 않으므로 강한 신호는 연달아 떠도 빠지지 않습니다.",
     );
   }
 
@@ -220,12 +238,18 @@ export function analyze(
           ? stats.avgReturn20d - baseline.avgReturn20d
           : null,
     },
-    spec: { ...spec, fresh_only: trigger.freshOnly, min_gap_days: trigger.minGapDays },
+    spec: {
+      ...spec,
+      top_pct: rule.topPct,
+      cluster_gap: rule.clusterGap,
+      cluster_pick: rule.clusterPick,
+    },
     warnings,
     lookaheadUsed: Boolean(lookahead && lookahead.days > 0),
     clustered: cluster,
     rawMatchCount,
     suppressedCount,
-    trigger,
+    rankedOutCount,
+    signalRule: rule,
   };
 }

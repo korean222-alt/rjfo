@@ -21,16 +21,23 @@ export const PARSER_SYSTEM_PROMPT = `너는 주식 거래량 분석 명령을 JS
 18. 명령이 모호하면 confidence를 "low"로 하고, interpretation에 어떻게 해석했는지 명시한다.
 19. interpretation은 반드시 한국어로 쓴다.
 
-신호 발화 규칙 (신호가 너무 많이 뜨는 걸 막는 장치):
-- fresh_only (boolean): true면 "직전 거래일에는 조건을 만족하지 않았던 날" = 조건에 처음 진입한 날만 신호로 센다.
-- min_gap_days (숫자): 직전 신호 이후 최소 이만큼의 거래일이 지나야 다음 신호를 인정한다.
+신호 정리 규칙 (신호가 너무 많이 뜨는 걸 막는 장치):
+- top_pct (1~100): 희귀도 상위 몇 %만 남길지. 조건 지표들이 그 종목 전체 분포에서 얼마나 드문
+  축인지를 백분위로 매긴 뒤, 드문 것부터 순서대로 이 비율만큼만 남긴다. 100이면 전부.
+  절대 임계값이 아니라 순위로 자르므로 조건이 빡빡한 경우에도 신호가 0개가 되지 않는다.
+- cluster_gap (1~20): 이만큼 이내로 붙어 있는 매칭일을 한 국면으로 묶어 하루만 남긴다.
+- cluster_pick ("rarest" | "first"): 국면 대표일을 가장 희귀한 날로 할지, 가장 이른 날로 할지.
+- 절대 시간 간격으로 신호를 솎아내지 마라. "직전 신호 이후 N일 대기" 방식은 정작 그 구간에서
+  제일 중요한 날을 통째로 잘라낸다. 신호를 줄여야 하면 top_pct를 낮춘다.
 - up_down_vol_ratio_20d, up_day_ratio_20d, obv_slope_20d, obv_slope_60d, atr_ratio_20d, range_ratio_20d,
   close_vs_sma20_pct, vol_ma_ratio_20_50는 20~60일 창을 쓰는 "상태" 지표라 한 번 조건에 들어가면
-  수십 일 내내 참이다. 이런 지표가 조건에 들어가면 fresh_only를 true로 두는 것이 기본이다.
-- "처음 진입한 날만", "첫 신호만", "새로 들어온 날만" → fresh_only: true
-- "신호가 너무 많다", "너무 자주 뜬다", "N일에 한 번만" → min_gap_days를 지정한다 (기본 20).
-- 사용자가 규칙을 언급하지 않았고 preset을 지정했다면 fresh_only / min_gap_days는 생략한다.
-  (프리셋마다 기본 발화 규칙이 서버에 정의돼 있다.)
+  수십 일 내내 참이다. 이런 지표가 조건에 들어가면 top_pct를 좁게(30 정도), cluster_gap을
+  넉넉하게(5 정도) 두는 것이 기본이다.
+- "신호가 너무 많다", "너무 자주 뜬다", "드문 것만", "강한 것만" → top_pct를 낮춘다 (20~30 권장).
+- "N일에 한 번만" 같은 요청도 시간 간격이 아니라 top_pct를 낮춰서 대응하고,
+  interpretation에 "시간 간격 대신 희귀도 순위로 걸렀다"고 밝힌다.
+- 사용자가 규칙을 언급하지 않았고 preset을 지정했다면 세 필드는 생략한다.
+  (프리셋마다 기본 정리 규칙이 서버에 정의돼 있다.)
 
 사용 가능한 metric과 의미:
 - volume: 거래량(주)
@@ -103,12 +110,12 @@ export const FEW_SHOT: { input: string; output: string }[] = [
   {
     input: "누적 매집 신호 찾아줘",
     output:
-      '{"conditions":[{"metric":"up_down_vol_ratio_20d","op":">=","value":2.0},{"metric":"obv_slope_20d","op":">=","value":0.6},{"metric":"vol_ma_ratio_20_50","op":">=","value":1.1},{"metric":"close_vs_sma20_pct","op":"<=","value":12}],"logic":"AND","preset":"accumulation","interpretation":"상승일 거래량이 하락일의 2배 이상이고 OBV와 거래량 베이스가 함께 올라오면서 아직 20일선에서 크게 뜨지 않은 누적 매집 구간으로 해석 — 조건에 처음 진입한 날만 신호로 셈","confidence":"low"}',
+      '{"conditions":[{"metric":"up_down_vol_ratio_20d","op":">=","value":2.0},{"metric":"obv_slope_20d","op":">=","value":0.6},{"metric":"vol_ma_ratio_20_50","op":">=","value":1.1},{"metric":"close_vs_sma20_pct","op":"<=","value":12}],"logic":"AND","preset":"accumulation","interpretation":"상승일 거래량이 하락일의 2배 이상이고 OBV와 거래량 베이스가 함께 올라오면서 아직 20일선에서 크게 뜨지 않은 누적 매집 구간으로 해석","confidence":"low"}',
   },
   {
-    input: "누적 매집 신호가 너무 많이 떠. 한 달에 한 번만 보여줘",
+    input: "누적 매집 신호가 너무 많이 떠. 드문 것만 보여줘",
     output:
-      '{"conditions":[{"metric":"up_down_vol_ratio_20d","op":">=","value":2.0},{"metric":"obv_slope_20d","op":">=","value":0.6},{"metric":"vol_ma_ratio_20_50","op":">=","value":1.1},{"metric":"close_vs_sma20_pct","op":"<=","value":12}],"logic":"AND","preset":"accumulation","fresh_only":true,"min_gap_days":20,"interpretation":"누적 매집 조건에 처음 진입한 날만, 그리고 직전 신호 이후 20거래일(약 한 달)이 지난 경우만 신호로 셈","confidence":"high"}',
+      '{"conditions":[{"metric":"up_down_vol_ratio_20d","op":">=","value":2.0},{"metric":"obv_slope_20d","op":">=","value":0.6},{"metric":"vol_ma_ratio_20_50","op":">=","value":1.1},{"metric":"close_vs_sma20_pct","op":"<=","value":12}],"logic":"AND","preset":"accumulation","top_pct":20,"cluster_gap":5,"interpretation":"누적 매집 조건 중 희귀도 상위 20%만 신호로 셈 — 시간 간격으로 자르지 않으므로 강한 신호가 연달아 떠도 빠지지 않음","confidence":"high"}',
   },
   {
     input: "상승 전 압축 신호 찾아줘",
@@ -128,7 +135,7 @@ export const FEW_SHOT: { input: string; output: string }[] = [
   {
     input: "조용히 매집하는 구간 찾아줘",
     output:
-      '{"conditions":[{"metric":"atr_ratio_20d","op":"<=","value":0.85},{"metric":"obv_slope_20d","op":">=","value":0.4},{"metric":"obv_slope_60d","op":">=","value":0.1},{"metric":"abs_close_change_pct","op":"<=","value":3.0},{"metric":"close_vs_sma20_pct","op":"<=","value":8}],"logic":"AND","preset":"stealth_accumulation","interpretation":"변동폭과 하루 등락은 작은데 OBV만 20일·60일 모두 올라오는, 티 안 나게 모으는 구간으로 해석 — 조건 진입 첫날만 신호로 셈","confidence":"low"}',
+      '{"conditions":[{"metric":"atr_ratio_20d","op":"<=","value":0.85},{"metric":"obv_slope_20d","op":">=","value":0.4},{"metric":"obv_slope_60d","op":">=","value":0.1},{"metric":"abs_close_change_pct","op":"<=","value":3.0},{"metric":"close_vs_sma20_pct","op":"<=","value":8}],"logic":"AND","preset":"stealth_accumulation","interpretation":"변동폭과 하루 등락은 작은데 OBV만 20일·60일 모두 올라오는, 티 안 나게 모으는 구간으로 해석","confidence":"low"}',
   },
   {
     input: "수급 개선 신호 찾아줘",

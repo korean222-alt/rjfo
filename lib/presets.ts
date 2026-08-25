@@ -9,8 +9,8 @@ import type { Condition, FilterSpec, PresetName } from "@/types";
  *    한 번 임계값을 넘으면 국면이 끝날 때까지 매일 참이다.
  *
  * 상태 지표만으로 만든 프리셋(누적 매집·수급 개선 등)은 조건을 아무리 다듬어도
- * "한 국면 = 신호 수십 개"가 된다. 그래서 조건 강화와 별개로 PRESET_TRIGGERS의
- * 발화 규칙(첫 진입만 + 최소 간격)을 같이 건다.
+ * "한 국면 = 신호 수십 개"가 된다. 그래서 조건 강화와 별개로 PRESET_SIGNAL_RULES의
+ * 정리 규칙(희귀도 하한 + 국면 묶기)을 같이 건다.
  */
 export const PRESET_CONDITIONS: Record<PresetName, Condition[]> = {
   // 흡수형: 거래량은 터졌는데 주가는 안 움직임
@@ -87,32 +87,46 @@ export const PRESET_CONDITIONS: Record<PresetName, Condition[]> = {
   ],
 };
 
-export type PresetTrigger = {
-  /** 직전 거래일에 조건을 만족하지 않았던 날(= 상태 진입 첫날)만 신호로 센다. */
-  fresh_only: boolean;
-  /** 직전 신호 이후 최소 N거래일이 지나야 다음 신호를 인정한다. */
-  min_gap_days: number;
+export type PresetSignalRule = {
+  /**
+   * 희귀도 상위 몇 %만 남길지 (1~100). 상태 지표로만 이뤄진 프리셋일수록 좁게 잡는다.
+   * 순위로 자르므로 조건이 이미 빡빡한 프리셋이 통째로 0개가 되지 않는다.
+   */
+  top_pct: number;
+  /** 이만큼 이내로 붙은 매칭일을 한 국면으로 묶는다 (1 = 연속일만). */
+  cluster_gap: number;
 };
 
 /**
- * 프리셋별 신호 발화 규칙.
- * 상태 지표 기반 프리셋일수록 fresh_only와 긴 min_gap_days가 필요하다.
+ * 프리셋별 신호 정리 규칙.
+ *
+ * 신호를 시간 간격으로 솎아내지 않는다("직전 신호 이후 N일 대기"). 그러면 정작 그
+ * 구간에서 제일 중요한 날이 통째로 사라진다. 대신 두 가지로 정리한다.
+ *
+ *  1. 국면 묶기 — 붙어 있는 날을 한 국면으로 묶되, 대표일은 그 국면에서 가장 희귀한 날.
+ *  2. 희귀도 순위 — 그렇게 남은 신호 중 드문 것부터 상위 몇 %만 남긴다.
+ *
+ * 어느 쪽도 "며칠 지났는가"를 보지 않는다. 강한 신호는 연달아 떠도 순위에서 위에 있어
+ * 절대 잘려나가지 않는다.
+ *
+ * 상태 지표(20~60일 롤링)는 한 국면이 통째로 조건을 만족하므로 gap을 넓게 잡아
+ * 하루이틀 끊긴 것도 같은 국면으로 본다.
  */
-export const PRESET_TRIGGERS: Record<PresetName, PresetTrigger> = {
-  // 이벤트 지표 기반 — 원래 드물게 뜬다. 연속 발화만 막는다.
-  absorption: { fresh_only: false, min_gap_days: 5 },
-  high_close: { fresh_only: false, min_gap_days: 5 },
-  volume_expansion: { fresh_only: false, min_gap_days: 5 },
-  strong_breakout: { fresh_only: false, min_gap_days: 5 },
-  base_breakout: { fresh_only: false, min_gap_days: 10 },
-  // 상태 지표가 섞임 — 진입 첫날만
-  squeeze: { fresh_only: true, min_gap_days: 10 },
-  volume_dry_up: { fresh_only: true, min_gap_days: 10 },
-  pullback_support: { fresh_only: true, min_gap_days: 10 },
-  flow_improvement: { fresh_only: true, min_gap_days: 15 },
-  // 전부 상태 지표 — 20일 창이 완전히 갈리는 간격을 둔다
-  accumulation: { fresh_only: true, min_gap_days: 20 },
-  stealth_accumulation: { fresh_only: true, min_gap_days: 20 },
+export const PRESET_SIGNAL_RULES: Record<PresetName, PresetSignalRule> = {
+  // 이벤트 지표 기반 — 원래 드물게 뜬다. 연속일만 묶고 순위 컷은 걸지 않는다.
+  absorption: { top_pct: 100, cluster_gap: 1 },
+  high_close: { top_pct: 100, cluster_gap: 1 },
+  volume_expansion: { top_pct: 100, cluster_gap: 1 },
+  strong_breakout: { top_pct: 100, cluster_gap: 1 },
+  base_breakout: { top_pct: 100, cluster_gap: 2 },
+  // 상태 지표가 섞임 — 국면을 넓게 묶고 절반만
+  squeeze: { top_pct: 50, cluster_gap: 3 },
+  volume_dry_up: { top_pct: 50, cluster_gap: 5 },
+  pullback_support: { top_pct: 50, cluster_gap: 3 },
+  // 전부 상태 지표 — 한 국면이 수십 일 참이라 가장 좁게
+  flow_improvement: { top_pct: 30, cluster_gap: 5 },
+  accumulation: { top_pct: 30, cluster_gap: 5 },
+  stealth_accumulation: { top_pct: 30, cluster_gap: 5 },
 };
 
 export type PresetChip = {
@@ -158,16 +172,16 @@ export const PRESET_CHIPS: PresetChip[] = [
   {
     label: "누적 매집",
     command:
-      "누적 매집: 최근 20일 상승일 거래량 합이 하락일 거래량 합의 2.0배 이상이고 OBV 20일 기울기가 0.6 이상이며 20일 평균 거래량이 50일 평균의 1.1배 이상이고 종가가 20일선 대비 12% 이내인 날 중 조건에 처음 진입한 날만 찾아줘",
-    description: "거래량비 2.0 · OBV 0.6 · 거래량 베이스 상승 · 20일선 +12% 이내 · 진입 첫날만",
+      "누적 매집: 최근 20일 상승일 거래량 합이 하락일 거래량 합의 2.0배 이상이고 OBV 20일 기울기가 0.6 이상이며 20일 평균 거래량이 50일 평균의 1.1배 이상이고 종가가 20일선 대비 12% 이내인 날 중 희귀도가 높은 날만 찾아줘",
+    description: "거래량비 2.0 · OBV 0.6 · 거래량 베이스 상승 · 20일선 +12% 이내 · 희귀도 상위만",
     conditions: PRESET_CONDITIONS.accumulation,
     preset: "accumulation",
   },
   {
     label: "조용한 매집",
     command:
-      "조용한 매집: ATR 비율이 0.85 이하이고 OBV 20일 기울기가 0.4 이상, OBV 60일 기울기가 0.1 이상이며 종가 변동이 ±3% 이내이고 20일선 대비 8% 이내인 날 중 조건에 처음 진입한 날만 찾아줘",
-    description: "변동폭 축소 · OBV 20/60일 상승 · 하루 변동 ±3% 이내 · 진입 첫날만",
+      "조용한 매집: ATR 비율이 0.85 이하이고 OBV 20일 기울기가 0.4 이상, OBV 60일 기울기가 0.1 이상이며 종가 변동이 ±3% 이내이고 20일선 대비 8% 이내인 날 중 희귀도가 높은 날만 찾아줘",
+    description: "변동폭 축소 · OBV 20/60일 상승 · 하루 변동 ±3% 이내 · 희귀도 상위만",
     conditions: PRESET_CONDITIONS.stealth_accumulation,
     preset: "stealth_accumulation",
   },
@@ -181,7 +195,7 @@ export const PRESET_CHIPS: PresetChip[] = [
   {
     label: "거래량 소진",
     command:
-      "거래량 소진: 20일 평균 거래량이 50일 평균의 0.8배 이하이고 당일 거래량이 20일 평균의 0.9배 이하이며 직전 60일 최고가 대비 -20% 이내인 날 중 조건에 처음 진입한 날만 찾아줘",
+      "거래량 소진: 20일 평균 거래량이 50일 평균의 0.8배 이하이고 당일 거래량이 20일 평균의 0.9배 이하이며 직전 60일 최고가 대비 -20% 이내인 날 중 희귀도가 높은 날만 찾아줘",
     description: "거래량 20일 베이스가 50일 대비 0.8배 이하 · 60일 고점 -20% 이내",
     conditions: PRESET_CONDITIONS.volume_dry_up,
     preset: "volume_dry_up",
@@ -211,7 +225,7 @@ export const PRESET_CHIPS: PresetChip[] = [
   {
     label: "눌림목 지지",
     command:
-      "눌림목 지지: 종가가 20일선 대비 -8%에서 +3% 사이이고 거래량이 20일 평균의 0.9배 이하이며 당일 고저폭 상위 40%에서 마감하고 최근 20일 상승일 거래량 합이 하락일의 1.2배 이상인 날 중 조건에 처음 진입한 날만 찾아줘",
+      "눌림목 지지: 종가가 20일선 대비 -8%에서 +3% 사이이고 거래량이 20일 평균의 0.9배 이하이며 당일 고저폭 상위 40%에서 마감하고 최근 20일 상승일 거래량 합이 하락일의 1.2배 이상인 날 중 희귀도가 높은 날만 찾아줘",
     description: "20일선 부근 눌림 · 조정 거래량 감소 · 고저폭 상위 40% 마감",
     conditions: PRESET_CONDITIONS.pullback_support,
     preset: "pullback_support",
@@ -219,8 +233,8 @@ export const PRESET_CHIPS: PresetChip[] = [
   {
     label: "수급 개선",
     command:
-      "수급 개선: 최근 20일 상승일 거래량 합이 하락일 거래량 합의 1.6배 이상이고 OBV 20일 기울기가 0.3 이상이며 20일 중 상승일 비율이 50% 이상인 날 중 조건에 처음 진입한 날만 찾아줘",
-    description: "거래량비 1.6 이상 · OBV 0.3 이상 · 상승일 비율 50% 이상 · 진입 첫날만",
+      "수급 개선: 최근 20일 상승일 거래량 합이 하락일 거래량 합의 1.6배 이상이고 OBV 20일 기울기가 0.3 이상이며 20일 중 상승일 비율이 50% 이상인 날 중 희귀도가 높은 날만 찾아줘",
+    description: "거래량비 1.6 이상 · OBV 0.3 이상 · 상승일 비율 50% 이상 · 희귀도 상위만",
     conditions: PRESET_CONDITIONS.flow_improvement,
     preset: "flow_improvement",
   },
