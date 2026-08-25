@@ -87,10 +87,19 @@ async function fetchFromChain(ticker: string): Promise<Bar[]> {
   );
 }
 
+export type LoadOptions = {
+  /**
+   * 캐시가 아직 fresh여도 무시하고 새로 받는다.
+   * 알림 크론처럼 "오늘 봉이 반드시 들어있어야" 하는 경로에서만 쓴다.
+   * 외부 소스가 전부 막히면 평소처럼 캐시로 떨어진다.
+   */
+  forceFresh?: boolean;
+};
+
 /** 캐시 우선. 외부 API는 캐시 미스일 때만 호출한다 (rate limit 방지). */
-export async function loadBars(ticker: string): Promise<Bar[]> {
+export async function loadBars(ticker: string, opts: LoadOptions = {}): Promise<Bar[]> {
   const cached = await getCachedBars(ticker);
-  if (cached?.fresh) return cached.bars;
+  if (cached?.fresh && !opts.forceFresh) return cached.bars;
 
   try {
     const bars = await fetchFromChain(ticker);

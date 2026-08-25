@@ -1,3 +1,4 @@
+import { kvGet, kvSet } from "@/lib/kv";
 import type { Bar } from "@/types";
 
 /**
@@ -31,12 +32,6 @@ export function __setSavedAtForTest(ticker: string, savedAt: number): void {
   if (env) env.savedAt = savedAt;
 }
 
-function kvConfig() {
-  const url = process.env.KV_REST_API_URL;
-  const token = process.env.KV_REST_API_TOKEN;
-  return url && token ? { url: url.replace(/\/+$/, ""), token } : null;
-}
-
 function keyFor(ticker: string): string {
   return `ohlcv:${ticker}`;
 }
@@ -63,23 +58,12 @@ function parseStored(raw: string): Envelope | null {
 
 export async function getCachedBars(ticker: string): Promise<CacheHit | null> {
   const key = keyFor(ticker);
-  const kv = kvConfig();
 
-  if (kv) {
-    try {
-      const res = await fetch(`${kv.url}/get/${encodeURIComponent(key)}`, {
-        headers: { Authorization: `Bearer ${kv.token}` },
-        cache: "no-store",
-        signal: AbortSignal.timeout(3_000),
-      });
-      if (res.ok) {
-        const body = (await res.json()) as { result: string | null };
-        const hit = body.result ? toHit(parseStored(body.result)) : null;
-        if (hit) return hit;
-      }
-    } catch {
-      // KV 장애는 치명적이지 않다. 메모리 캐시로 폴백.
-    }
+  // KV 장애는 치명적이지 않다 (kvGet이 null을 준다). 메모리 캐시로 폴백.
+  const raw = await kvGet(key);
+  if (raw) {
+    const hit = toHit(parseStored(raw));
+    if (hit) return hit;
   }
 
   const hit = toHit(memory.get(key) ?? null);
@@ -92,20 +76,7 @@ export async function setCachedBars(ticker: string, bars: Bar[]): Promise<void> 
   const env: Envelope = { v: 1, savedAt: Date.now(), bars };
   memory.set(key, env);
 
-  const kv = kvConfig();
-  if (!kv) return;
-  try {
-    // KV TTL은 stale 한계까지 잡는다. fresh 판정은 savedAt으로 따로 한다.
-    await fetch(`${kv.url}/set/${encodeURIComponent(key)}?EX=${STALE_SECONDS}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${kv.token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(env),
-      signal: AbortSignal.timeout(3_000),
-    });
-  } catch {
-    // 캐시 쓰기 실패는 무시 (다음 요청에서 다시 시도).
-  }
+  // KV TTL은 stale 한계까지 잡는다. fresh 판정은 savedAt으로 따로 한다.
+  // 쓰기 실패는 무시 (다음 요청에서 다시 시도).
+  await kvSet(key, JSON.stringify(env), STALE_SECONDS);
 }
