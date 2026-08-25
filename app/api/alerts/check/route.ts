@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { json } from "@/lib/json-response";
 import { checkLatest, formatAlert, type SignalHit } from "@/lib/alerts/evaluate";
 import { alertsAvailable, listWatches, markNotified, type Watch } from "@/lib/alerts/store";
 import { TelegramError, sendTelegram, telegramReady } from "@/lib/alerts/telegram";
@@ -22,21 +22,21 @@ export async function GET(req: Request) {
   // 설정돼 있는데 헤더가 없으면 외부에서 들어온 호출이므로 막는다.
   const secret = process.env.CRON_SECRET;
   if (secret && req.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "권한이 없습니다." }, { status: 401 });
+    return json({ error: "권한이 없습니다." }, { status: 401 });
   }
 
   if (!alertsAvailable()) {
-    return NextResponse.json({ error: "알림 저장소(KV)가 설정되지 않았습니다." }, { status: 503 });
+    return json({ error: "알림 저장소(KV)가 설정되지 않았습니다." }, { status: 503 });
   }
   if (!telegramReady()) {
-    return NextResponse.json(
+    return json(
       { error: "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID가 설정되지 않았습니다." },
       { status: 503 },
     );
   }
 
   const watches = await listWatches();
-  if (!watches.length) return NextResponse.json({ checked: 0, sent: 0, notes: ["등록된 알림이 없습니다."] });
+  if (!watches.length) return json({ checked: 0, sent: 0, notes: ["등록된 알림이 없습니다."] });
 
   // 같은 종목의 여러 신호는 시세를 한 번만 받는다 (시세 API 호출 수 = 종목 수).
   const byTicker = new Map<string, Watch[]>();
@@ -101,5 +101,5 @@ export async function GET(req: Request) {
   }
 
   await markNotified(marks);
-  return NextResponse.json({ checked: byTicker.size, sent, notes });
+  return json({ checked: byTicker.size, sent, notes });
 }

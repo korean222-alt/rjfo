@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { json } from "@/lib/json-response";
 import { generateText, GeminiError, type GeminiTurn } from "@/lib/gemini";
 import { FEW_SHOT, PARSER_SYSTEM_PROMPT } from "@/lib/parse-prompt";
 import { extractJson, validateSpec } from "@/lib/validate-spec";
@@ -24,14 +24,14 @@ export async function POST(req: Request) {
     const body = (await req.json()) as { command?: unknown };
     command = typeof body.command === "string" ? body.command.trim() : "";
   } catch {
-    return NextResponse.json({ error: "잘못된 요청입니다." }, { status: 400 });
+    return json({ error: "잘못된 요청입니다." }, { status: 400 });
   }
 
   if (!command) {
-    return NextResponse.json({ error: "명령을 입력해 주세요." }, { status: 400 });
+    return json({ error: "명령을 입력해 주세요." }, { status: 400 });
   }
   if (command.length > 500) {
-    return NextResponse.json({ error: "명령이 너무 깁니다 (500자 이내)." }, { status: 400 });
+    return json({ error: "명령이 너무 깁니다 (500자 이내)." }, { status: 400 });
   }
 
   // 빠른 신호는 AI 해석을 거치지 않는다. 칩에 적힌 조건을 그대로 쓴다 (결과가 항상 같다).
@@ -45,13 +45,13 @@ export async function POST(req: Request) {
       interpretation: `${selected.label}: ${selected.hint}`,
       confidence: selected.lookahead ? "low" : "high",
     };
-    return NextResponse.json({ spec, model: "preset" });
+    return json({ spec, model: "preset" });
   }
 
   // 직접 입력한 자유 명령만 AI로 해석한다.
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   if (!apiKey) {
-    return NextResponse.json(
+    return json(
       { error: "서버에 GEMINI_API_KEY가 설정되지 않았습니다." },
       { status: 500 },
     );
@@ -81,11 +81,11 @@ export async function POST(req: Request) {
       lastRaw = text.slice(0, 500);
 
       const spec: FilterSpec = validateSpec(extractJson(text));
-      return NextResponse.json({ spec, model });
+      return json({ spec, model });
     } catch (e) {
       if (e instanceof GeminiError) {
         // 모델 호출 자체가 실패한 경우는 재시도해도 같다 (체인을 이미 다 돌았다).
-        return NextResponse.json(
+        return json(
           { error: e.message, attempts: e.attempts },
           { status: e.status },
         );
@@ -94,7 +94,7 @@ export async function POST(req: Request) {
     }
   }
 
-  return NextResponse.json(
+  return json(
     { error: `명령을 이해하지 못했어요. ${EXAMPLE_HINT}`, detail: lastDetail },
     { status: 422 },
   );
