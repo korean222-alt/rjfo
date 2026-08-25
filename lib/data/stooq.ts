@@ -14,8 +14,9 @@ import { DataProviderError, type DataProvider } from "./provider";
  * 항상 Yahoo가 우선한다.
  */
 
-const BASE = "https://stooq.com/q/d/l/";
-const TIMEOUT_MS = 8_000;
+// stooq.com이 막히거나 빈 응답을 줄 때가 있어 .pl 미러도 함께 둔다.
+const BASES = ["https://stooq.com/q/d/l/", "https://stooq.pl/q/d/l/"];
+const TIMEOUT_MS = 6_000;
 
 /** 티커.접미사 형태에서 '거래소 접미사'로 인정할 것들 (그 외의 점은 클래스 구분자). */
 const EXCHANGE_SUFFIXES = new Set([
@@ -94,57 +95,87 @@ export function parseStooqCsv(csv: string): Bar[] {
   return bars;
 }
 
+/** 응답이 CSV가 아닐 때, 무슨 답이 왔는지 에러 메시지에 남긴다 (원인 파악용). */
+function snippet(text: string): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+async function fetchCsvBars(base: string, symbol: string, ticker: string): Promise<Bar[]> {
+  const url = `${base}?s=${encodeURIComponent(symbol)}&i=d`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        Accept: "text/csv,text/plain,*/*",
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (e) {
+    throw new DataProviderError(
+      `보조 시세 서버에 연결하지 못했습니다: ${(e as Error).message}`,
+      502,
+    );
+  }
+
+  if (!res.ok) {
+    throw new DataProviderError(
+      `보조 시세 서버 오류 (HTTP ${res.status}).`,
+      res.status === 429 ? 429 : 502,
+    );
+  }
+
+  const text = await res.text();
+  // 한도 초과·차단·없는 심볼일 때 CSV 대신 안내 문구나 HTML이 온다.
+  if (/exceeded the daily hits limit/i.test(text)) {
+    throw new DataProviderError("보조 시세 서버 일일 한도를 초과했습니다.", 429);
+  }
+
+  const bars = parseStooqCsv(text);
+  if (!bars.length) {
+    // "데이터 없음"과 "차단당함"은 원인이 전혀 다르다. 응답 일부를 남겨 구분한다.
+    const head = snippet(text);
+    if (!head) {
+      throw new DataProviderError(`'${ticker}' 보조 소스가 빈 응답을 보냈습니다.`, 502);
+    }
+    if (/^</.test(head)) {
+      throw new DataProviderError(
+        `'${ticker}' 보조 소스가 CSV 대신 페이지를 반환했습니다: ${head}`,
+        502,
+      );
+    }
+    throw new DataProviderError(`'${ticker}' 보조 소스 응답: ${head}`, 404);
+  }
+
+  return bars;
+}
+
 export class StooqProvider implements DataProvider {
   readonly name = "stooq";
 
   async getDailyBars(ticker: string, years: number): Promise<Bar[]> {
     const symbol = toStooqSymbol(ticker);
-    const url = `${BASE}?s=${encodeURIComponent(symbol)}&i=d`;
+    let lastError: DataProviderError | null = null;
 
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          Accept: "text/csv,text/plain,*/*",
-        },
-        cache: "no-store",
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-    } catch (e) {
-      throw new DataProviderError(
-        `보조 시세 서버에 연결하지 못했습니다: ${(e as Error).message}`,
-        502,
-      );
+    for (const base of BASES) {
+      try {
+        const all = await fetchCsvBars(base, symbol, ticker);
+        // 요청한 기간만 남긴다 (Stooq는 상장 이후 전체를 준다).
+        const cutoff = new Date(Date.now() - years * 366 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .slice(0, 10);
+        const bars = all.filter((b) => b.date >= cutoff);
+        return bars.length ? bars : all;
+      } catch (e) {
+        lastError = e as DataProviderError;
+        // 미러도 같은 답을 줄 이유는 없으니 다음 호스트로 계속 간다.
+      }
     }
 
-    if (!res.ok) {
-      throw new DataProviderError(
-        `보조 시세 서버 오류 (HTTP ${res.status}).`,
-        res.status === 429 ? 429 : 502,
-      );
-    }
-
-    const text = await res.text();
-    // 한도 초과·없는 심볼일 때 CSV 대신 안내 문구/HTML이 온다.
-    if (/exceeded the daily hits limit/i.test(text)) {
-      throw new DataProviderError("보조 시세 서버 일일 한도를 초과했습니다.", 429);
-    }
-    if (/^\s*</.test(text) || /no data/i.test(text)) {
-      throw new DataProviderError(`'${ticker}' 보조 소스에도 데이터가 없습니다.`, 404);
-    }
-
-    const all = parseStooqCsv(text);
-    if (!all.length) {
-      throw new DataProviderError(`'${ticker}' 보조 소스에도 데이터가 없습니다.`, 404);
-    }
-
-    // 요청한 기간만 남긴다 (Stooq는 상장 이후 전체를 준다).
-    const cutoffMs = Date.now() - years * 366 * 24 * 60 * 60 * 1000;
-    const cutoff = new Date(cutoffMs).toISOString().slice(0, 10);
-    const bars = all.filter((b) => b.date >= cutoff);
-    return bars.length ? bars : all;
+    throw lastError ?? new DataProviderError(`'${ticker}' 보조 소스 조회 실패.`, 502);
   }
 }

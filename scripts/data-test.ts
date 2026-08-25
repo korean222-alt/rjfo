@@ -13,6 +13,8 @@ import { loadBars } from "../lib/data";
 import { __clearMemoryCache, setCachedBars } from "../lib/data/cache";
 import { DataProviderError } from "../lib/data/provider";
 import { parseStooqCsv, toStooqSymbol } from "../lib/data/stooq";
+import { fetchBarsInBrowser } from "../lib/client-quotes";
+import { BarValidationError, validateBars } from "../lib/validate-bars";
 import { __resetYahooSession } from "../lib/data/yahoo";
 import type { Bar } from "../types";
 
@@ -217,6 +219,73 @@ console.log("\n[8] 캐시도 없고 전부 429면 429 에러");
     err instanceof DataProviderError && err.message.includes("잠시 후"),
     `사람이 읽을 수 있는 안내 문구: ${(err as Error).message}`,
   );
+}
+
+console.log("\n[9] Stooq가 CSV 대신 페이지를 주면 원인을 에러에 남긴다");
+{
+  reset();
+  install((url) => {
+    if (url.includes("stooq")) {
+      return new Response("<html><body>Access denied</body></html>", { status: 200 });
+    }
+    return new Response("Too Many Requests", { status: 429 });
+  });
+  let err: unknown = null;
+  try {
+    await loadBars("GOOG");
+  } catch (e) {
+    err = e;
+  }
+  restore();
+  const msg = (err as Error).message;
+  assert(msg.includes("Access denied"), `응답 본문 일부가 에러에 담김: ${msg}`);
+  assert(
+    calls.filter((u) => u.includes("stooq")).length === 2,
+    "stooq.com 실패 후 stooq.pl 미러도 시도",
+  );
+}
+
+console.log("\n[10] 브라우저 직접 조회 (client-quotes)");
+{
+  reset();
+  install((url, init) => {
+    // CORS preflight를 만들지 않으려면 커스텀 헤더가 없어야 한다.
+    assert(!init?.headers, "커스텀 헤더 없이 요청 (preflight 회피)");
+    return url.includes("query1")
+      ? new Response("blocked", { status: 429 })
+      : yahooChart(300);
+  });
+  const bars = await fetchBarsInBrowser("NVDA");
+  restore();
+  assert(bars.length === 300, `브라우저 경로로 ${bars.length}개 확보`);
+  assert(calls.some((u) => u.includes("query2")), "query1 실패 시 query2로 넘어감");
+}
+
+console.log("\n[11] 클라이언트가 보낸 일봉 검증 (validate-bars)");
+{
+  const good = [
+    { date: "2024-01-02", open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 },
+    { date: "2024-01-03", open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 },
+  ];
+  assert(validateBars(good).length === 2, "정상 일봉 통과");
+
+  const cases: Array<[string, unknown]> = [
+    ["배열이 아님", { date: "2024-01-02" }],
+    ["날짜 형식 오류", [{ ...good[0], date: "2024/01/02" }]],
+    ["역순/중복", [good[1], good[0]]],
+    ["숫자가 아님", [{ ...good[0], close: "많이" }]],
+    ["음수 가격", [{ ...good[0], close: -1 }]],
+    ["고가 < 저가", [{ ...good[0], high: 0.1, low: 5 }]],
+  ];
+  for (const [label, bad] of cases) {
+    let threw = false;
+    try {
+      validateBars(bad);
+    } catch (e) {
+      threw = e instanceof BarValidationError;
+    }
+    assert(threw, `거절: ${label}`);
+  }
 }
 
 console.log(failures === 0 ? "\n✅ 전부 통과\n" : `\n❌ ${failures}개 실패\n`);

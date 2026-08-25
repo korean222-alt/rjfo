@@ -122,7 +122,10 @@ Vercel 대시보드 → Storage에서 KV(Upstash Redis) 스토어를 만들어 �
 (브라우저에서 부르면 CORS).
 
 ```
-Yahoo Finance (비공식 chart API)  ──실패──▶  Stooq (CSV)  ──실패──▶  만료된 캐시
+[서버] Yahoo (비공식 chart API) ──실패──▶ Stooq (CSV) ──실패──▶ 만료된 캐시
+                                                                    │ 그래도 실패
+                                                                    ▼
+[브라우저] 사용자 기기에서 Yahoo 직접 호출 ──▶ 받은 일봉을 /api/analyze로 전송
 ```
 
 ### 왜 배포하면 HTTP 429가 뜨나
@@ -138,6 +141,33 @@ IP가 Vercel 것이라 요청 수와 무관하게 막힐 수 있다. 그래서:
 5. Stooq도 실패하면 만료된 캐시라도 반환, 그것도 없으면 사람이 읽을 수 있는 429 안내
 
 `DATA_PROVIDER=stooq`로 아예 Stooq만 쓰게 고정할 수도 있다 (`yahoo` / `fixture`도 가능).
+
+### 서버가 막히면 브라우저가 대신 받아온다
+
+위 폴백이 전부 실패하면 **사용자 기기의 브라우저가 직접 Yahoo를 호출**하고, 받아온 일봉을
+`/api/analyze`에 실어 보낸다 (`lib/client-quotes.ts` → `lib/analyze-client.ts`).
+차단당하는 건 Vercel의 데이터센터 IP지 사용자의 통신사·가정용 IP가 아니기 때문에,
+서버가 429를 맞는 상황에서도 이 경로는 대체로 살아 있다.
+
+- 계산은 **여전히 서버 코드가 한다.** 브라우저는 원본 일봉만 나른다.
+- 서버는 받은 일봉을 `lib/validate-bars.ts`로 전부 검증한다 (날짜 형식·오름차순·중복·
+  유한한 숫자·양수 가격·고가≥저가·개수 상한). 하나라도 어긋나면 통째로 400.
+- 검증했더라도 **클라이언트가 보낸 데이터는 서버 캐시에 넣지 않는다.** 다른 사용자에게
+  오염된 데이터가 퍼지지 않게 하기 위해서다. 대신 그 브라우저의 sessionStorage에만 남겨
+  결과 화면에서 다시 계산할 때 재사용한다.
+- Yahoo가 CORS preflight를 허용하지 않으므로 커스텀 헤더 없이 단순 GET으로만 부른다.
+
+### 원인 진단: `/api/diag`
+
+배포 화면에 에러가 떴을 때 어느 소스가 왜 막혔는지 추측하지 않으려고 둔 라우트다.
+
+```
+https://<배포주소>/api/diag?ticker=NVDA
+```
+
+각 소스별로 성공 여부·HTTP 상태·에러 메시지·소요 시간·받아온 일봉 수를 그대로 보여주고,
+`DATA_PROVIDER` / `DATA_DEADLINE_MS` / KV·Gemini 키가 함수에 실제로 주입됐는지도 알려준다
+(**값은 노출하지 않고 존재 여부만**).
 
 > Stooq는 분할 조정은 되어 있지만 배당 조정은 하지 않는다. 거래량 필터가 목적이라
 > 실사용에 문제는 없고, Yahoo가 살아 있으면 항상 Yahoo가 우선한다.
@@ -164,8 +194,12 @@ app/
   page.tsx                  메인 (티커 + 명령 입력)
   results/page.tsx          결과 화면
   api/parse/route.ts        자연어 → FilterSpec
-  api/analyze/route.ts      데이터 로드 + 지표 + 필터 + 통계
+  api/analyze/route.ts      데이터 로드 + 지표 + 필터 + 통계 (일봉을 직접 받기도 함)
+  api/diag/route.ts         시세 소스 진단 (?ticker=NVDA)
 lib/
+  analyze-client.ts         분석 요청 + 브라우저 폴백 조율
+  client-quotes.ts          브라우저에서 Yahoo 직접 호출
+  validate-bars.ts          클라이언트가 보낸 일봉 검증
   data/provider.ts          데이터 소스 인터페이스
   data/yahoo.ts             Yahoo 어댑터 (429 재시도 + 조정 처리)
   data/stooq.ts             Stooq CSV 폴백 어댑터
