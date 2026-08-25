@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const EXAMPLE_HINT =
-  '예: "거래량 9천만주 이상 터진 날", "20일 평균 대비 3배 이상인데 주가는 거의 안 움직인 날", "세력이 매집한 것 같은 날"';
+  '예: "매집 신호", "상승 전 압축 신호", "초기 돌파 신호", "강한 돌파 신호", "수급 개선 신호"';
 
 /** few-shot을 대화 형태로 넣는다. */
 function fewShotHistory(): GeminiTurn[] {

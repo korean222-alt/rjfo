@@ -53,7 +53,14 @@ export type Condition = {
   value: number;
 };
 
-export type PresetName = "absorption" | "high_close" | "accumulation" | "squeeze";
+export type PresetName =
+  | "absorption"
+  | "high_close"
+  | "accumulation"
+  | "squeeze"
+  | "volume_expansion"
+  | "strong_breakout"
+  | "flow_improvement";
 
 export type FilterSpec = {
   conditions: Condition[];

@@ -57,9 +57,12 @@ export async function POST(req: Request) {
     const enriched = enrich(bars);
     const result = analyze(ticker, enriched, spec, { cluster: body.cluster !== false });
 
-    // 차트용 시계열 (일봉이 많아 payload가 커지므로 필요한 필드만)
+    // 차트용 시계열 (일봉이 많아 payload가 커지므로 필요한 OHLCV 필드만)
     const series = enriched.map((b) => ({
       date: b.date,
+      open: Number(b.open.toFixed(4)),
+      high: Number(b.high.toFixed(4)),
+      low: Number(b.low.toFixed(4)),
       close: Number(b.close.toFixed(4)),
       volume: b.volume,
     }));

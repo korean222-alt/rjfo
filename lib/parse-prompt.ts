@@ -8,9 +8,12 @@ export const PARSER_SYSTEM_PROMPT = `너는 주식 거래량 분석 명령을 JS
 5. "세력 매집", "누적 매집", "물량 흡수", "매집 신호"는 모두 accumulation preset을 지정하고 그에 맞는 conditions도 함께 채운다. absorption은 과거 저장 결과 호환용이므로 새 명령에 사용하지 않는다.
 6. "상승 전 압축", "변동성 축소", "움직임이 줄고 거래량이 붙는" 표현은 squeeze preset을 지정하고 conditions도 함께 채운다.
 7. "초기 돌파", "거래량 동반 고가 마감", "고가 부근 마감" 표현은 high_close preset을 지정하고 conditions도 함께 채운다.
-8. "급등 직전", "대상승 전"처럼 미래 상승을 기준으로 한 표현에는 lookahead를 설정하고 confidence를 "low"로 한다. 이는 과거 검증 전용 조건이다.
-9. 명령이 모호하면 confidence를 "low"로 하고, interpretation에 어떻게 해석했는지 명시한다.
-10. interpretation은 반드시 한국어로 쓴다.
+8. "강한 돌파", "강한 상승 돌파" 표현은 strong_breakout preset을 지정하고 conditions도 함께 채운다.
+9. "거래량 확장", "거래량 폭발", "이례적 거래량" 표현은 volume_expansion preset을 지정하고 conditions도 함께 채운다.
+10. "수급 개선", "상승일 거래량 우세", "OBV 개선" 표현은 flow_improvement preset을 지정하고 conditions도 함께 채운다.
+11. "급등 직전", "대상승 전"처럼 미래 상승을 기준으로 한 표현에는 lookahead를 설정하고 confidence를 "low"로 한다. 이는 과거 검증 전용 조건이다.
+12. 명령이 모호하면 confidence를 "low"로 하고, interpretation에 어떻게 해석했는지 명시한다.
+13. interpretation은 반드시 한국어로 쓴다.
 
 사용 가능한 metric과 의미:
 - volume: 거래량(주)
@@ -32,6 +35,12 @@ preset 정의:
   → atr_ratio_20d <= 0.8 AND volume_ratio_20d >= 1.2 AND close_position_in_range >= 0.6
 - "high_close" (초기 돌파): 거래량 증가 + 상승 마감 + 고가 부근 마감
   → volume_ratio_20d >= 1.8 AND close_change_pct >= 1.0 AND close_position_in_range >= 0.75
+- "strong_breakout" (강한 돌파): 거래량 급증 + 강한 상승 + 고가권 마감
+  → volume_ratio_20d >= 2.0 AND close_change_pct >= 2.0 AND close_position_in_range >= 0.85
+- "volume_expansion" (거래량 확장): 20일 평균 대비 급증 + 60일 기준 이례적 거래량
+  → volume_ratio_20d >= 2.5 AND volume_zscore_60d >= 1.5
+- "flow_improvement" (수급 개선): 상승일 거래량 우위 + OBV 상승 방향
+  → up_down_vol_ratio_20d >= 1.4 AND obv_slope_20d >= 0.15
 - "absorption"은 이전 저장 결과를 위한 호환용이다.
   → volume_ratio_20d >= 2.0 AND abs_close_change_pct <= 2.0`;
 
@@ -56,5 +65,15 @@ export const FEW_SHOT: { input: string; output: string }[] = [
     input: "상승 전 압축 신호 찾아줘",
     output:
       '{"conditions":[{"metric":"atr_ratio_20d","op":"<=","value":0.8},{"metric":"volume_ratio_20d","op":">=","value":1.2},{"metric":"close_position_in_range","op":">=","value":0.6}],"logic":"AND","preset":"squeeze","interpretation":"평소보다 변동폭이 줄어든 상태에서 거래량과 종가 위치가 개선되는 상승 전 압축 신호로 해석","confidence":"low"}',
+  },
+  {
+    input: "강한 돌파 신호 찾아줘",
+    output:
+      '{"conditions":[{"metric":"volume_ratio_20d","op":">=","value":2.0},{"metric":"close_change_pct","op":">=","value":2.0},{"metric":"close_position_in_range","op":">=","value":0.85}],"logic":"AND","preset":"strong_breakout","interpretation":"거래량이 크게 증가하고 2% 이상 오른 뒤 고가권에서 마감한 강한 돌파 신호로 해석","confidence":"high"}',
+  },
+  {
+    input: "수급 개선 신호 찾아줘",
+    output:
+      '{"conditions":[{"metric":"up_down_vol_ratio_20d","op":">=","value":1.4},{"metric":"obv_slope_20d","op":">=","value":0.15}],"logic":"AND","preset":"flow_improvement","interpretation":"상승일 거래량이 하락일보다 우세하고 OBV가 개선되는 수급 개선 신호로 해석","confidence":"low"}',
   },
 ];

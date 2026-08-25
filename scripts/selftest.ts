@@ -9,7 +9,8 @@
 import { enrich } from "../lib/indicators";
 import { applyFilter, clusterIndices } from "../lib/filter";
 import { analyze, forwardReturn, maxForwardReturn } from "../lib/stats";
-import type { Bar, FilterSpec } from "../types";
+import { PRESET_CONDITIONS } from "../lib/presets";
+import type { Bar, FilterSpec, PresetName } from "../types";
 
 let failures = 0;
 
@@ -193,6 +194,25 @@ console.log("\n[6] AND / OR 로직");
     conditions: [{ metric: "atr_ratio_20d", op: ">=", value: 0 }],
   });
   assert(atrReady.length === bars.length - 33, "ATR 비율 조건은 워밍업 이후 봉만 통과");
+}
+
+console.log("\n[7] 빠른 신호 프리셋");
+{
+  const expected: PresetName[] = [
+    "absorption",
+    "accumulation",
+    "squeeze",
+    "high_close",
+    "strong_breakout",
+    "volume_expansion",
+    "flow_improvement",
+  ];
+  assert(
+    expected.every((name) => PRESET_CONDITIONS[name].length > 0),
+    "모든 빠른 신호가 하나 이상의 유효 조건을 가짐",
+  );
+  assert(PRESET_CONDITIONS.strong_breakout.length === 3, "강한 돌파는 거래량·가격·고가권 마감 조건을 사용");
+  assert(PRESET_CONDITIONS.flow_improvement.length === 2, "수급 개선은 상승일 수급·OBV 조건을 사용");
 }
 
 console.log(
