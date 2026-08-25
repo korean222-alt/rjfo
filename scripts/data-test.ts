@@ -15,6 +15,7 @@ import { DataProviderError } from "../lib/data/provider";
 import { parseStooqCsv, toStooqSymbol } from "../lib/data/stooq";
 import { fetchBarsInBrowser } from "../lib/client-quotes";
 import { BarValidationError, validateBars } from "../lib/validate-bars";
+import { parseTwelveValues } from "../lib/data/twelvedata";
 import { __resetYahooSession } from "../lib/data/yahoo";
 import type { Bar } from "../types";
 
@@ -51,6 +52,7 @@ function reset() {
   delete process.env.DATA_PROVIDER;
   delete process.env.KV_REST_API_URL;
   delete process.env.KV_REST_API_TOKEN;
+  delete process.env.TWELVE_DATA_API_KEY;
   process.env.DATA_DEADLINE_MS = "3000";
 }
 
@@ -206,6 +208,7 @@ console.log("\n[7] 전부 실패해도 만료된 캐시가 있으면 그걸 쓴�
 console.log("\n[8] 캐시도 없고 전부 429면 429 에러");
 {
   reset();
+  process.env.TWELVE_DATA_API_KEY = "test-key"; // 키가 있어도 전부 막힌 경우
   install(() => new Response("Too Many Requests", { status: 429 }));
   let err: unknown = null;
   try {
@@ -286,6 +289,79 @@ console.log("\n[11] 클라이언트가 보낸 일봉 검증 (validate-bars)");
     }
     assert(threw, `거절: ${label}`);
   }
+}
+
+function twelveJson(days = 90): Response {
+  const values = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(Date.UTC(2024, 0, 2 + i)).toISOString().slice(0, 10);
+    const c = (100 + i * 0.1).toFixed(2);
+    // 문자열로 오는 게 정상이다 (Twelve Data는 숫자를 문자열로 준다).
+    values.push({ datetime: d, open: c, high: c, low: c, close: c, volume: "1000000" });
+  }
+  return new Response(JSON.stringify({ status: "ok", values }), { status: 200 });
+}
+
+console.log("\n[12] Twelve Data — 키가 있으면 1순위");
+{
+  reset();
+  process.env.TWELVE_DATA_API_KEY = "test-key";
+  install((url) => {
+    if (url.includes("api.twelvedata.com")) return twelveJson(300);
+    return new Response("Too Many Requests", { status: 429 });
+  });
+  const bars = await loadBars("NVDA");
+  restore();
+  assert(bars.length === 300, `Twelve Data에서 ${bars.length}개 확보`);
+  assert(calls.length === 1, `첫 소스에서 끝남 (호출 ${calls.length}회)`);
+  assert(!calls[0].includes("finance.yahoo"), "Yahoo를 부르지 않음");
+  assert(calls[0].includes("order=ASC"), "오래된 순으로 요청");
+}
+
+console.log("\n[13] Twelve Data — 값 파싱 / HTTP 200에 담긴 에러");
+{
+  const bars = parseTwelveValues([
+    { datetime: "2024-01-03", open: "2", high: "3", low: "1", close: "2.5", volume: "5" },
+    { datetime: "2024-01-02", open: "1", high: "2", low: "0.5", close: "1.5", volume: "10" },
+    { datetime: "2024-01-02", open: "9", high: "9", low: "9", close: "9", volume: "9" }, // 중복
+    { datetime: "bad", open: "1", high: "1", low: "1", close: "1", volume: "1" },
+    { datetime: "2024-01-04", open: "1", high: "1", low: "1", close: "0", volume: "1" }, // 종가 0
+  ]);
+  assert(bars.length === 2, `유효한 2개만 남김 (${bars.length})`);
+  assert(bars[0].date === "2024-01-02", "오래된 순 정렬");
+  assert(bars[0].close === 1.5, "문자열 숫자를 number로 변환");
+
+  // 한도 초과를 HTTP 200 본문에 담아 보내는 경우
+  reset();
+  process.env.TWELVE_DATA_API_KEY = "test-key";
+  install((url) => {
+    if (url.includes("api.twelvedata.com")) {
+      return new Response(
+        JSON.stringify({ code: 429, status: "error", message: "You have run out of API credits" }),
+        { status: 200 },
+      );
+    }
+    if (url.includes("stooq")) return new Response(stooqCsv(80), { status: 200 });
+    return new Response("Too Many Requests", { status: 429 });
+  });
+  const fallback = await loadBars("AMD");
+  restore();
+  assert(fallback.length === 80, "한도 초과면 다음 소스로 넘어감");
+}
+
+console.log("\n[14] 키가 없고 전부 막히면 무엇을 해야 하는지 알려준다");
+{
+  reset();
+  install(() => new Response("Too Many Requests", { status: 429 }));
+  let err: unknown = null;
+  try {
+    await loadBars("META");
+  } catch (e) {
+    err = e;
+  }
+  restore();
+  const msg = (err as Error).message;
+  assert(msg.includes("TWELVE_DATA_API_KEY"), `조치 방법이 담긴 안내: ${msg}`);
 }
 
 console.log(failures === 0 ? "\n✅ 전부 통과\n" : `\n❌ ${failures}개 실패\n`);
