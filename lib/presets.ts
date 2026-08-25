@@ -40,57 +40,11 @@ export const PRESET_CONDITIONS: Record<PresetName, Condition[]> = {
   ],
 };
 
-export type PresetChip = {
-  label: string;
-  command: string;
-  description: string;
-};
-
-/** UI 프리셋 칩 — 기존 명령은 원문을 유지하고, 설명에는 검증 가능한 기준을 표시한다. */
-export const PRESET_CHIPS: PresetChip[] = [
-  {
-    label: "거래량 폭발",
-    command: "20일 평균 대비 3배 이상 거래량이 터진 날 찾아줘",
-    description: "20일 평균 거래량 대비 3.0배 이상",
-  },
-  {
-    label: "물량 흡수",
-    command: "거래량은 터졌는데 주가는 거의 안 움직인 날 찾아줘",
-    description: "20일 평균 대비 2.0배 이상 · 종가 변동 ±2.0% 이내",
-  },
-  {
-    label: "고가 마감",
-    command: "거래량 늘면서 고가 부근에서 마감한 날 찾아줘",
-    description: "20일 평균 대비 1.8배 이상 · 당일 고저폭 상위 25%에서 마감",
-  },
-  {
-    label: "급등 직전",
-    command: "20일 안에 20% 이상 급등하기 직전에 거래량이 튀었던 날",
-    description: "이후 20거래일 안에 +20% 이상 상승한 과거 검증",
-  },
-  {
-    label: "누적 매집",
-    command: "세력이 매집한 것 같은 날 찾아줘",
-    description: "최근 20일 상승일 거래량합 ÷ 하락일 거래량합 1.5배 이상 · OBV 기울기 0.3 이상",
-  },
-  {
-    label: "상승 전 압축",
-    command: "변동성은 줄고 거래량과 종가 위치가 좋아지는 상승 전 압축 신호 찾아줘",
-    description: "ATR 비율 0.8 이하 · 20일 평균 거래량 대비 1.2배 이상 · 종가 위치 0.6 이상",
-  },
-  {
-    label: "강한 돌파",
-    command: "거래량이 급증하고 2% 이상 오르면서 고가 부근에서 마감한 강한 돌파 신호 찾아줘",
-    description: "20일 평균 거래량 대비 2.0배 이상 · +2.0% 이상 · 종가 위치 0.85 이상",
-  },
-  {
-    label: "거래량 확장",
-    command: "20일 평균보다 2.5배 이상이고 60일 기준으로도 이례적인 거래량 확장 신호 찾아줘",
-    description: "20일 평균 거래량 대비 2.5배 이상 · 60일 z-score 1.5 이상",
-  },
-  {
-    label: "수급 개선",
-    command: "상승일 거래량이 우세하고 OBV가 개선되는 수급 개선 신호 찾아줘",
-    description: "최근 20일 상승·하락일 거래량 비율 1.4 이상 · OBV 기울기 0.15 이상",
-  },
+/** UI 프리셋 칩 — 초기 버전의 5개 명령을 그대로 유지한다. */
+export const PRESET_CHIPS: { label: string; command: string }[] = [
+  { label: "거래량 폭발", command: "20일 평균 대비 3배 이상 거래량이 터진 날 찾아줘" },
+  { label: "물량 흡수", command: "거래량은 터졌는데 주가는 거의 안 움직인 날 찾아줘" },
+  { label: "고가 마감", command: "거래량 늘면서 고가 부근에서 마감한 날 찾아줘" },
+  { label: "급등 직전", command: "20일 안에 20% 이상 급등하기 직전에 거래량이 튀었던 날" },
+  { label: "누적 매집", command: "세력이 매집한 것 같은 날 찾아줘" },
 ];
