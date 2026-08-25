@@ -26,7 +26,14 @@ export function saveAnalysis(payload: AnalysisPayload): void {
 export function loadAnalysis(): AnalysisPayload | null {
   try {
     const raw = sessionStorage.getItem(ANALYSIS_KEY);
-    return raw ? (JSON.parse(raw) as AnalysisPayload) : null;
+    if (!raw) return null;
+    const payload = JSON.parse(raw) as AnalysisPayload;
+    // 배포 전에 저장된 결과에는 발화 규칙 필드가 없다. 화면이 죽는 대신 버린다.
+    if (!payload?.result?.trigger || typeof payload.result.rawMatchCount !== "number") {
+      sessionStorage.removeItem(ANALYSIS_KEY);
+      return null;
+    }
+    return payload;
   } catch {
     return null;
   }

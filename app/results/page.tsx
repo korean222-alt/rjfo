@@ -19,6 +19,9 @@ const VolumeChart = dynamic(() => import("@/components/VolumeChart"), {
   loading: () => <div className="h-[276px] rounded-2xl border border-border bg-surface" />,
 });
 
+/** 신호 간 최소 간격 선택지 (거래일). 20 ≈ 한 달. */
+const MIN_GAP_CHOICES = [0, 5, 10, 20, 40];
+
 export default function ResultsPage() {
   const [payload, setPayload] = useState<AnalysisPayload | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -67,6 +70,25 @@ export default function ResultsPage() {
       }
     },
     [result],
+  );
+
+  /** 발화 규칙(첫 진입만 · 최소 간격)을 바꿔 같은 조건으로 다시 계산한다. */
+  const updateTrigger = useCallback(
+    async (patch: Partial<Pick<FilterSpec, "fresh_only" | "min_gap_days">>) => {
+      if (!result) return;
+      setBusy(true);
+      try {
+        const nextSpec: FilterSpec = { ...result.spec, ...patch };
+        const data = await runAnalyze(result.ticker, nextSpec, { cluster });
+        saveAnalysis(data);
+        setPayload(data);
+      } catch {
+        // 실패하면 기존 결과를 그대로 둔다.
+      } finally {
+        setBusy(false);
+      }
+    },
+    [cluster, result],
   );
 
   const reanalyze = useCallback(async () => {
@@ -266,27 +288,92 @@ export default function ResultsPage() {
         <VolumeChart series={payload.series} matchDates={matchDates} />
       </div>
 
-      <div className="mb-3 flex items-center justify-between rounded-xl border border-border bg-surface px-4 py-3">
-        <div>
-          <p className="text-sm font-medium">연속일 묶기</p>
-          <p className="text-xs text-muted">연속으로 붙은 매칭일을 하나로 계산</p>
+      <section className="mb-3 rounded-xl border border-border bg-surface px-4 py-3">
+        <div className="flex items-baseline justify-between gap-3">
+          <p className="text-sm font-semibold">신호 발화 규칙</p>
+          <p className="text-xs text-muted">
+            조건 충족 {result.rawMatchCount}일 → 신호 {result.stats.matchCount}개
+          </p>
         </div>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => toggleCluster(!cluster)}
-          className={`h-7 w-12 rounded-full transition disabled:opacity-50 ${
-            cluster ? "bg-blue-500" : "bg-border"
-          }`}
-          aria-pressed={cluster}
-        >
-          <span
-            className={`block h-6 w-6 rounded-full bg-white transition-transform ${
-              cluster ? "translate-x-5" : "translate-x-0.5"
+
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium">첫 진입만</p>
+            <p className="text-xs leading-relaxed text-muted">
+              조건에 새로 들어온 날만 신호로 셉니다 (20일 롤링 지표는 며칠씩 계속 참이라 그대로 두면 신호가 몰립니다)
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => updateTrigger({ fresh_only: !result.trigger.freshOnly })}
+            className={`h-7 w-12 shrink-0 rounded-full transition disabled:opacity-50 ${
+              result.trigger.freshOnly ? "bg-blue-500" : "bg-border"
             }`}
-          />
-        </button>
-      </div>
+            aria-pressed={result.trigger.freshOnly}
+            aria-label="첫 진입만"
+          >
+            <span
+              className={`block h-6 w-6 rounded-full bg-white transition-transform ${
+                result.trigger.freshOnly ? "translate-x-5" : "translate-x-0.5"
+              }`}
+            />
+          </button>
+        </div>
+
+        <div className="mt-3 border-t border-border pt-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <p className="text-sm font-medium">신호 간 최소 간격</p>
+            <p className="text-xs text-muted">
+              {result.trigger.minGapDays === 0
+                ? "제한 없음"
+                : `${result.trigger.minGapDays}거래일`}
+            </p>
+          </div>
+          <div className="mt-2 grid grid-cols-5 gap-1.5">
+            {MIN_GAP_CHOICES.map((days) => {
+              const active = result.trigger.minGapDays === days;
+              return (
+                <button
+                  key={days}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => updateTrigger({ min_gap_days: days })}
+                  aria-pressed={active}
+                  className={`rounded-lg border py-2 text-xs font-medium tabular-nums transition disabled:opacity-50 ${
+                    active ? "border-blue-400 bg-blue-500/15" : "border-border bg-bg text-muted"
+                  }`}
+                >
+                  {days === 0 ? "없음" : `${days}일`}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium">연속일 묶기</p>
+            <p className="text-xs text-muted">연속으로 붙은 매칭일을 하나로 계산</p>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => toggleCluster(!cluster)}
+            className={`h-7 w-12 shrink-0 rounded-full transition disabled:opacity-50 ${
+              cluster ? "bg-blue-500" : "bg-border"
+            }`}
+            aria-pressed={cluster}
+            aria-label="연속일 묶기"
+          >
+            <span
+              className={`block h-6 w-6 rounded-full bg-white transition-transform ${
+                cluster ? "translate-x-5" : "translate-x-0.5"
+              }`}
+            />
+          </button>
+        </div>
+      </section>
 
       <h2 className="mb-2 mt-6 text-sm font-semibold text-muted">
         매칭 날짜 · 총 거래량 {compactNumber(result.matches.reduce((a, m) => a + m.volume, 0))}

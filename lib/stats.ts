@@ -6,7 +6,8 @@ import type {
   MatchRow,
   StatBlock,
 } from "@/types";
-import { applyFilter, clusterIndices } from "./filter";
+import { applyFilter, clusterIndices, enforceMinGap } from "./filter";
+import { PRESET_TRIGGERS } from "./presets";
 
 export const HIT_THRESHOLD_PCT = 10; // "성공" 정의: 20거래일 안에 +10% 이상
 export const HORIZON = 20;
@@ -85,6 +86,18 @@ export type AnalyzeOptions = {
 };
 
 /**
+ * 스펙에 발화 규칙이 명시돼 있으면 그걸 쓰고, 없으면 프리셋 기본값을 쓴다.
+ * 프리셋도 없으면 규칙 없음(예전 동작 그대로).
+ */
+export function resolveTrigger(spec: FilterSpec): { freshOnly: boolean; minGapDays: number } {
+  const preset = spec.preset ? PRESET_TRIGGERS[spec.preset] : undefined;
+  return {
+    freshOnly: spec.fresh_only ?? preset?.fresh_only ?? false,
+    minGapDays: spec.min_gap_days ?? preset?.min_gap_days ?? 0,
+  };
+}
+
+/**
  * 필터 적용 → 매칭일 전방 수익률 → base rate와 비교.
  *
  * baseline이 이 앱의 핵심이다. 조건에 걸린 날의 승률이 45%인데 아무 날이나 골라도 44%라면
@@ -98,23 +111,37 @@ export function analyze(
 ): AnalysisResult {
   const cluster = options.cluster !== false;
   const warnings: string[] = [];
+  const trigger = resolveTrigger(spec);
 
-  let indices = applyFilter(bars, spec);
+  // 발화 규칙을 적용한 스펙 / 적용하지 않은 원본, 두 갈래를 함께 센다.
+  // "조건은 120일 충족했는데 신호는 6개"를 화면에서 그대로 보여주기 위해서다.
+  const effectiveSpec: FilterSpec = { ...spec, fresh_only: trigger.freshOnly };
+  const rawIndices = applyFilter(bars, spec, { applyTrigger: false });
+  let indices = applyFilter(bars, effectiveSpec);
 
   // lookahead: "급등 직전" 류 — 미래 창 안에서 목표 수익률을 달성한 날만 남긴다.
   const lookahead = spec.lookahead;
-  if (lookahead && lookahead.days > 0) {
-    indices = indices.filter((i) => {
-      const mx = maxForwardReturn(bars, i, lookahead.days);
-      return mx != null && mx >= lookahead.min_return_pct;
-    });
-  }
+  const passesLookahead = (i: number) => {
+    if (!lookahead || !(lookahead.days > 0)) return true;
+    const mx = maxForwardReturn(bars, i, lookahead.days);
+    return mx != null && mx >= lookahead.min_return_pct;
+  };
+  const rawMatchCount = rawIndices.filter(passesLookahead).length;
+  indices = indices.filter(passesLookahead);
 
   let sizes: number[] = indices.map(() => 1);
   if (cluster) {
     const c = clusterIndices(indices);
     indices = c.kept;
     sizes = c.sizes;
+  }
+
+  // 최소 간격: 상태 지표가 임계값 근처에서 껌뻑이며 같은 국면을 여러 번 발화하는 걸 막는다.
+  if (trigger.minGapDays > 0) {
+    const kept = enforceMinGap(indices, trigger.minGapDays);
+    const keptSet = new Set(kept);
+    sizes = sizes.filter((_, k) => keptSet.has(indices[k]));
+    indices = kept;
   }
 
   const matches: MatchRow[] = indices.map((i, k) => {
@@ -146,10 +173,26 @@ export function analyze(
   }
   const baseline = summarize(bars, baselineIndices);
 
+  const suppressedCount = Math.max(0, rawMatchCount - matches.length);
+
   if (matches.length === 0) {
-    warnings.push("조건에 맞는 날이 없습니다. 조건을 완화해 보세요.");
+    warnings.push(
+      rawMatchCount > 0
+        ? `조건은 ${rawMatchCount}일 충족했지만 발화 규칙(첫 진입만 · 최소 간격 ${trigger.minGapDays}일)을 통과한 신호가 없습니다. 아래에서 규칙을 완화해 보세요.`
+        : "조건에 맞는 날이 없습니다. 조건을 완화해 보세요.",
+    );
   } else if (matches.length < 10) {
     warnings.push("표본이 너무 적어 통계적 의미 없음 (매칭 10일 미만).");
+  }
+
+  if (suppressedCount > 0) {
+    const parts: string[] = [];
+    if (trigger.freshOnly) parts.push("첫 진입만");
+    if (trigger.minGapDays > 0) parts.push(`최소 간격 ${trigger.minGapDays}일`);
+    if (cluster) parts.push("연속일 묶기");
+    warnings.push(
+      `조건 충족 ${rawMatchCount}일 중 ${suppressedCount}일을 ${parts.join(" · ")} 규칙으로 묶어 신호 ${matches.length}개로 정리했습니다.`,
+    );
   }
 
   const withoutWindow = matches.length - stats.sampleCount;
@@ -177,9 +220,12 @@ export function analyze(
           ? stats.avgReturn20d - baseline.avgReturn20d
           : null,
     },
-    spec,
+    spec: { ...spec, fresh_only: trigger.freshOnly, min_gap_days: trigger.minGapDays },
     warnings,
     lookaheadUsed: Boolean(lookahead && lookahead.days > 0),
     clustered: cluster,
+    rawMatchCount,
+    suppressedCount,
+    trigger,
   };
 }

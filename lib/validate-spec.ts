@@ -1,4 +1,4 @@
-import { METRICS, OPS, type FilterSpec, type Metric, type Op } from "@/types";
+import { MAX_MIN_GAP_DAYS, METRICS, OPS, type FilterSpec, type Metric, type Op } from "@/types";
 import { PRESET_CONDITIONS } from "./presets";
 
 export class SpecValidationError extends Error {}
@@ -60,12 +60,25 @@ export function validateSpec(raw: unknown): FilterSpec {
     if (start || end) period = { start, end };
   }
 
+  // 발화 규칙 — 명시되지 않으면 undefined로 두고 프리셋 기본값에 맡긴다.
+  const fresh_only = typeof o.fresh_only === "boolean" ? o.fresh_only : undefined;
+
+  let min_gap_days: number | undefined;
+  if (o.min_gap_days !== undefined && o.min_gap_days !== null) {
+    const g = Number(o.min_gap_days);
+    if (isFinite(g) && g >= 0) {
+      min_gap_days = Math.min(Math.round(g), MAX_MIN_GAP_DAYS);
+    }
+  }
+
   return {
     conditions: finalConditions,
     logic: o.logic === "OR" ? "OR" : "AND",
     lookahead,
     period,
     preset,
+    fresh_only,
+    min_gap_days,
     interpretation:
       typeof o.interpretation === "string" && o.interpretation.trim()
         ? o.interpretation.trim()

@@ -20,10 +20,24 @@ function metricValue(bar: EnrichedBar, metric: Metric): number | null {
       return bar.range_pct;
     case "up_down_vol_ratio_20d":
       return bar.up_down_vol_ratio_20d;
+    case "up_day_ratio_20d":
+      return bar.up_day_ratio_20d;
     case "obv_slope_20d":
       return bar.obv_slope_20d;
+    case "obv_slope_60d":
+      return bar.obv_slope_60d;
     case "atr_ratio_20d":
       return bar.atr_ratio_20d;
+    case "range_ratio_20d":
+      return bar.range_ratio_20d;
+    case "close_vs_sma20_pct":
+      return bar.close_vs_sma20_pct;
+    case "dist_from_high_60d_pct":
+      return bar.dist_from_high_60d_pct;
+    case "dist_from_low_60d_pct":
+      return bar.dist_from_low_60d_pct;
+    case "vol_ma_ratio_20_50":
+      return bar.vol_ma_ratio_20_50;
   }
 }
 
@@ -50,22 +64,65 @@ function inPeriod(date: string, period?: FilterSpec["period"]): boolean {
   return true;
 }
 
-/** 조건(+기간)을 만족하는 봉의 인덱스를 반환. lookahead는 stats 단계에서 적용한다. */
-export function applyFilter(bars: EnrichedBar[], spec: FilterSpec): number[] {
+/** 한 봉이 조건 집합(로직 포함)을 만족하는지. 기간은 보지 않는다. */
+function passesConditions(bar: EnrichedBar, spec: FilterSpec): boolean {
   const conditions = spec.conditions ?? [];
+  if (conditions.length === 0) return false; // 조건 없는 스펙은 전체 매칭시키지 않는다
+  return spec.logic === "OR"
+    ? conditions.some((c) => testCondition(bar, c))
+    : conditions.every((c) => testCondition(bar, c));
+}
+
+export type FilterOptions = {
+  /**
+   * false면 spec.fresh_only를 무시하고 조건 충족일을 전부 반환한다.
+   * (발화 규칙 적용 전 원본 매칭 수를 세는 용도)
+   */
+  applyTrigger?: boolean;
+};
+
+/**
+ * 조건(+기간)을 만족하는 봉의 인덱스를 반환. lookahead는 stats 단계에서 적용한다.
+ *
+ * spec.fresh_only가 켜져 있으면 "직전 거래일에는 조건을 만족하지 않았던 날"만 남긴다.
+ * up_down_vol_ratio_20d나 obv_slope_20d처럼 20일 롤링 창을 쓰는 상태 지표는
+ * 한 번 조건에 들어가면 수십 일 내내 참이라, 이게 없으면 같은 국면 하나가
+ * 신호 수십 개로 부풀려진다.
+ */
+export function applyFilter(
+  bars: EnrichedBar[],
+  spec: FilterSpec,
+  options: FilterOptions = {},
+): number[] {
+  const freshOnly = options.applyTrigger === false ? false : Boolean(spec.fresh_only);
   const out: number[] = [];
 
+  let prevPass = false;
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
-    if (!inPeriod(bar.date, spec.period)) continue;
-    if (conditions.length === 0) continue; // 조건 없는 스펙은 전체 매칭시키지 않는다
+    const pass = passesConditions(bar, spec);
 
-    const pass =
-      spec.logic === "OR"
-        ? conditions.some((c) => testCondition(bar, c))
-        : conditions.every((c) => testCondition(bar, c));
+    // 기간 밖이어도 "직전 상태"는 이어져야 진입 첫날 판정이 흔들리지 않는다.
+    if (pass && !(freshOnly && prevPass) && inPeriod(bar.date, spec.period)) {
+      out.push(i);
+    }
+    prevPass = pass;
+  }
+  return out;
+}
 
-    if (pass) out.push(i);
+/**
+ * 직전 신호 이후 minGap 거래일이 지나지 않은 신호를 버린다.
+ * 상태 지표가 임계값 근처에서 껐다 켜졌다 하며 같은 국면을 여러 번 발화하는 걸 막는다.
+ */
+export function enforceMinGap(indices: number[], minGap: number): number[] {
+  if (!(minGap > 0)) return indices;
+  const out: number[] = [];
+  let last: number | null = null;
+  for (const idx of indices) {
+    if (last != null && idx - last < minGap) continue;
+    out.push(idx);
+    last = idx;
   }
   return out;
 }

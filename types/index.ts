@@ -21,10 +21,17 @@ export type EnrichedBar = Bar & {
   close_position_in_range: number;
   range_pct: number;
   up_down_vol_ratio_20d: number | null;
+  up_day_ratio_20d: number | null;
   obv: number;
   obv_slope_20d: number | null;
+  obv_slope_60d: number | null;
   atr14: number | null;
   atr_ratio_20d: number | null;
+  range_ratio_20d: number | null;
+  close_vs_sma20_pct: number | null;
+  dist_from_high_60d_pct: number | null;
+  dist_from_low_60d_pct: number | null;
+  vol_ma_ratio_20_50: number | null;
 };
 
 // ── FilterSpec ─────────────────────────────────────────────────────
@@ -38,8 +45,15 @@ export const METRICS = [
   "close_position_in_range",
   "range_pct",
   "up_down_vol_ratio_20d",
+  "up_day_ratio_20d",
   "obv_slope_20d",
+  "obv_slope_60d",
   "atr_ratio_20d",
+  "range_ratio_20d",
+  "close_vs_sma20_pct",
+  "dist_from_high_60d_pct",
+  "dist_from_low_60d_pct",
+  "vol_ma_ratio_20_50",
 ] as const;
 
 export type Metric = (typeof METRICS)[number];
@@ -60,7 +74,14 @@ export type PresetName =
   | "squeeze"
   | "volume_expansion"
   | "strong_breakout"
-  | "flow_improvement";
+  | "flow_improvement"
+  | "stealth_accumulation"
+  | "volume_dry_up"
+  | "base_breakout"
+  | "pullback_support";
+
+/** 신호 발화 규칙 상한 (스펙 검증에서 잘라낸다). */
+export const MAX_MIN_GAP_DAYS = 120;
 
 export type FilterSpec = {
   conditions: Condition[];
@@ -71,6 +92,13 @@ export type FilterSpec = {
   };
   period?: { start?: string; end?: string };
   preset?: PresetName | null;
+  /**
+   * 상태 지표(20일 롤링)는 한 번 조건에 들어가면 수십 일 내내 참이라 신호가 폭주한다.
+   * true면 "직전 거래일에는 조건을 만족하지 않았던 날" = 상태 진입 첫날만 신호로 센다.
+   */
+  fresh_only?: boolean;
+  /** 직전 신호 이후 최소 N거래일이 지나야 다음 신호를 인정한다 (재발화 억제). */
+  min_gap_days?: number;
   interpretation: string;
   confidence: "high" | "low";
 };
@@ -116,4 +144,9 @@ export type AnalysisResult = {
   warnings: string[];
   lookaheadUsed: boolean;
   clustered: boolean;
+  /** 발화 규칙 적용 전, 조건만 만족한 거래일 수 */
+  rawMatchCount: number;
+  /** 발화 규칙(첫 진입만·최소 간격·연속일 묶기)으로 걸러낸 신호 수 */
+  suppressedCount: number;
+  trigger: { freshOnly: boolean; minGapDays: number };
 };

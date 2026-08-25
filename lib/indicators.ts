@@ -53,6 +53,22 @@ function regressionSlope(values: number[], i: number, n: number): number | null 
   return den === 0 ? null : num / den;
 }
 
+/** 직전 n봉(현재 봉 제외)의 최고가. 구간이 모자라면 null. */
+function priorHighest(bars: Bar[], i: number, n: number): number | null {
+  if (i < n) return null;
+  let hi = -Infinity;
+  for (let k = i - n; k <= i - 1; k++) hi = Math.max(hi, bars[k].high);
+  return isFinite(hi) ? hi : null;
+}
+
+/** 직전 n봉(현재 봉 제외)의 최저가. 구간이 모자라면 null. */
+function priorLowest(bars: Bar[], i: number, n: number): number | null {
+  if (i < n) return null;
+  let lo = Infinity;
+  for (let k = i - n; k <= i - 1; k++) lo = Math.min(lo, bars[k].low);
+  return isFinite(lo) ? lo : null;
+}
+
 /**
  * Bar[] → 파생 지표가 붙은 EnrichedBar[].
  * 워밍업 구간(20~60봉)의 지표는 null이며, 필터에서 자동으로 제외된다.
@@ -60,6 +76,8 @@ function regressionSlope(values: number[], i: number, n: number): number | null 
 export function enrich(bars: Bar[]): EnrichedBar[] {
   const n = bars.length;
   const volumes = bars.map((b) => b.volume);
+  const closes = bars.map((b) => b.close);
+  const ranges = bars.map((b) => b.high - b.low);
 
   // OBV: 상승일 +volume, 하락일 -volume 누적
   const obv: number[] = new Array(n);
@@ -138,6 +156,49 @@ export function enrich(bars: Bar[]): EnrichedBar[] {
         ? rawSlope / vol_ma20
         : null;
 
+    // OBV 60봉 기울기 — 20봉짜리보다 훨씬 느리게 바뀌므로 "장기 매집 방향" 확인용
+    const rawSlope60 = regressionSlope(obv, i, 60);
+    const obv_slope_60d =
+      rawSlope60 != null && vol_ma50 != null && vol_ma50 > 0
+        ? rawSlope60 / vol_ma50
+        : null;
+
+    // 20일 이동평균 종가 대비 이격도(%) — 이미 위로 크게 떠 있으면 "매집 중"이 아니다
+    const sma20Close = sma(closes, i, 20);
+    const close_vs_sma20_pct =
+      sma20Close != null && sma20Close > 0
+        ? ((b.close - sma20Close) / sma20Close) * 100
+        : null;
+
+    // 직전 60봉 최고가 대비 종가 위치(%) — 0 이상이면 60일 신고가 돌파
+    const high60 = priorHighest(bars, i, 60);
+    const dist_from_high_60d_pct =
+      high60 != null && high60 > 0 ? ((b.close - high60) / high60) * 100 : null;
+
+    // 직전 60봉 최저가 대비 종가 위치(%) — 바닥에서 얼마나 올라와 있는지
+    const low60 = priorLowest(bars, i, 60);
+    const dist_from_low_60d_pct =
+      low60 != null && low60 > 0 ? ((b.close - low60) / low60) * 100 : null;
+
+    // 당일 고저폭 ÷ 20일 평균 고저폭 — 1보다 작을수록 조용한 날
+    const range_ma20 = sma(ranges, i, 20);
+    const range_ratio_20d =
+      range_ma20 != null && range_ma20 > 0 ? span / range_ma20 : null;
+
+    // 거래량 20일MA ÷ 50일MA — 거래량 "바닥 자체"가 올라오는 중인지
+    const vol_ma_ratio_20_50 =
+      vol_ma20 != null && vol_ma50 != null && vol_ma50 > 0 ? vol_ma20 / vol_ma50 : null;
+
+    // 최근 20봉 중 상승 마감한 날의 비율 (0~1)
+    let up_day_ratio_20d: number | null = null;
+    if (i >= 20) {
+      let up = 0;
+      for (let k = i - 19; k <= i; k++) {
+        if (bars[k].close > bars[k - 1].close) up++;
+      }
+      up_day_ratio_20d = up / 20;
+    }
+
     return {
       ...b,
       vol_ma20,
@@ -150,10 +211,17 @@ export function enrich(bars: Bar[]): EnrichedBar[] {
       close_position_in_range,
       range_pct: b.close > 0 ? (span / b.close) * 100 : 0,
       up_down_vol_ratio_20d,
+      up_day_ratio_20d,
       obv: obv[i],
       obv_slope_20d,
+      obv_slope_60d,
       atr14: atr[i],
       atr_ratio_20d,
+      range_ratio_20d,
+      close_vs_sma20_pct,
+      dist_from_high_60d_pct,
+      dist_from_low_60d_pct,
+      vol_ma_ratio_20_50,
     };
   });
 }
