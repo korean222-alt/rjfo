@@ -122,11 +122,37 @@ Vercel 대시보드 → Storage에서 KV(Upstash Redis) 스토어를 만들어 �
 (브라우저에서 부르면 CORS).
 
 ```
-[서버] Yahoo (비공식 chart API) ──실패──▶ Stooq (CSV) ──실패──▶ 만료된 캐시
-                                                                    │ 그래도 실패
-                                                                    ▼
+[서버] Twelve Data (키 필요) ──실패──▶ Yahoo ──실패──▶ Stooq ──실패──▶ 만료된 캐시
+                                                                          │ 그래도 실패
+                                                                          ▼
 [브라우저] 사용자 기기에서 Yahoo 직접 호출 ──▶ 받은 일봉을 /api/analyze로 전송
 ```
+
+### 배포하려면 시세 API 키가 사실상 필요하다
+
+Yahoo와 Stooq는 키가 필요 없는 대신 **IP만 보고 막는다.** 실제 배포에서 확인한 결과:
+
+| 소스 | Vercel 람다에서의 응답 |
+|---|---|
+| Yahoo | `HTTP 429` (데이터센터 IP 차단) |
+| Stooq | CSV 대신 `<!DOCTYPE html>` 봇 차단 페이지 |
+| 브라우저 직접 호출 | Yahoo가 CORS를 허용하지 않아 실패 |
+
+로컬에서는 잘 되는데 배포하면 안 되는 이유가 이것이다. 내 코드 문제가 아니라
+**IP 평판 문제**라 재시도·폴백으로는 못 뚫는다.
+
+해결책은 IP가 아니라 **키로 식별되는 소스**를 쓰는 것이다:
+
+1. [twelvedata.com](https://twelvedata.com/pricing)에서 무료 가입 → API 키 발급 (하루 800회)
+2. Vercel 대시보드 → Settings → Environment Variables → `TWELVE_DATA_API_KEY` 추가
+   (Production/Preview 모두)
+3. **Redeploy** — 환경변수는 재배포해야 함수에 들어간다
+
+키가 없으면 이 소스는 체인에서 통째로 빠지고, 기존 Yahoo → Stooq 경로로만 동작한다
+(로컬 개발은 그걸로 충분하다). 전부 막히면 에러 화면이 키 발급 방법을 알려준다.
+
+> Twelve Data는 분할 조정된 가격을 준다. 무료 플랜은 미국 상장 종목 위주라
+> 한국 종목 등은 Yahoo 폴백이 받는다.
 
 ### 왜 배포하면 HTTP 429가 뜨나
 
@@ -202,6 +228,7 @@ lib/
   validate-bars.ts          클라이언트가 보낸 일봉 검증
   data/provider.ts          데이터 소스 인터페이스
   data/yahoo.ts             Yahoo 어댑터 (429 재시도 + 조정 처리)
+  data/twelvedata.ts        Twelve Data 어댑터 (키 기반, 1순위)
   data/stooq.ts             Stooq CSV 폴백 어댑터
   data/fixture.ts           오프라인 데모용 합성 데이터
   data/cache.ts             KV / 메모리 캐시 (fresh 12h, stale 7d)

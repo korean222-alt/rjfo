@@ -51,10 +51,13 @@ export async function GET(req: Request) {
       DATA_DEADLINE_MS: process.env.DATA_DEADLINE_MS ?? null,
       hasKv: Boolean(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN),
       hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
+      hasTwelveDataKey: Boolean(process.env.TWELVE_DATA_API_KEY),
     },
     sources,
     hint: sources.every((s) => !s.ok)
-      ? "서버(Vercel IP)에서는 모든 소스가 막혔습니다. 앱은 이 경우 브라우저에서 직접 시세를 받아 분석합니다."
+      ? process.env.TWELVE_DATA_API_KEY
+        ? "모든 소스 실패. 위 error를 보고 원인을 확인하세요."
+        : "무료 소스가 서버 IP를 차단했습니다. twelvedata.com 무료 키를 TWELVE_DATA_API_KEY 환경변수에 넣으면 해결됩니다."
       : "서버에서 시세 조회 가능.",
   });
 }

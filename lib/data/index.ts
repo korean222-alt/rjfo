@@ -3,6 +3,7 @@ import { getCachedBars, setCachedBars } from "./cache";
 import { FixtureProvider } from "./fixture";
 import { DataProviderError, type DataProvider } from "./provider";
 import { StooqProvider } from "./stooq";
+import { TwelveDataProvider, twelveDataKey } from "./twelvedata";
 import { YahooProvider } from "./yahoo";
 
 const YEARS = 5; // 통계에 의미 있는 표본을 위한 최소 기간
@@ -10,9 +11,11 @@ const YEARS = 5; // 통계에 의미 있는 표본을 위한 최소 기간
 /**
  * 데이터 소스 체인. 앞에서부터 시도하고 실패하면 다음으로 넘어간다.
  *
- * Yahoo는 무료지만 데이터센터 IP(Vercel 람다)를 429로 막는 일이 잦다.
- * 그래서 키 없이 쓸 수 있는 Stooq를 폴백으로 둔다. 둘 다 실패하면
- * 만료된 캐시라도 내보낸다(loadBars 참고).
+ * 키 기반 소스(Twelve Data)가 있으면 그게 1순위다. Yahoo·Stooq는 키가 필요 없는
+ * 대신 **IP만 보고 막는다**. 실제 배포에서 Yahoo는 429, Stooq는 CSV 대신 봇 차단
+ * 페이지를 돌려줬다. 키 기반 소스는 IP가 아니라 키로 식별하므로 이 문제가 없다.
+ *
+ * 전부 실패하면 만료된 캐시라도 내보낸다(loadBars 참고).
  *
  * 주의: env는 반드시 호출 시점에 읽는다. 모듈 최상위에서 읽으면 Next가
  * 빌드 타임에 값을 인라인해 버려서 배포 환경변수가 무시된다.
@@ -25,8 +28,12 @@ export function getProviders(): DataProvider[] {
       return [new StooqProvider()];
     case "yahoo":
       return [new YahooProvider()];
+    case "twelvedata":
+      return [new TwelveDataProvider()];
     default:
-      return [new YahooProvider(), new StooqProvider()];
+      return twelveDataKey()
+        ? [new TwelveDataProvider(), new YahooProvider(), new StooqProvider()]
+        : [new YahooProvider(), new StooqProvider()];
   }
 }
 
@@ -54,6 +61,19 @@ async function fetchFromChain(ticker: string): Promise<Bar[]> {
 
   // 한 소스라도 "그런 티커 없다"고 했으면 그게 가장 정확한 원인이다.
   if (notFound) throw notFound;
+
+  // 키 없는 소스만 있는데 전부 막혔다면, 원인은 이 티커가 아니라 서버 IP 차단이다.
+  // 사용자가 할 수 있는 조치를 알려준다.
+  if (!twelveDataKey()) {
+    // 원인을 지우지 않는다. 조치 방법과 실제 실패 사유를 함께 준다.
+    const cause = (lastError as Error)?.message ?? "알 수 없는 오류";
+    throw new DataProviderError(
+      `무료 시세 소스가 모두 막혔습니다 (${cause}) ` +
+        "twelvedata.com에서 무료 API 키를 발급받아 환경변수 TWELVE_DATA_API_KEY에 넣으면 해결됩니다.",
+      429,
+    );
+  }
+
   if (lastError instanceof DataProviderError && lastError.status === 429) {
     throw new DataProviderError(
       "시세 서버가 요청을 제한하고 있어 지금은 데이터를 가져올 수 없습니다. 잠시 후 다시 시도해 주세요.",
