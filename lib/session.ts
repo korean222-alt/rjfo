@@ -6,12 +6,18 @@ export type AnalysisPayload = {
   series: SeriesPoint[];
 };
 
-const KEY = "volume-analyzer:last";
+export type SearchDraft = {
+  ticker: string;
+  command: string;
+};
+
+const ANALYSIS_KEY = "volume-analyzer:last";
+const DRAFT_KEY = "volume-analyzer:search-draft";
 
 /** 결과는 payload가 커서 URL로 넘기지 않고 sessionStorage로 전달한다. */
 export function saveAnalysis(payload: AnalysisPayload): void {
   try {
-    sessionStorage.setItem(KEY, JSON.stringify(payload));
+    sessionStorage.setItem(ANALYSIS_KEY, JSON.stringify(payload));
   } catch {
     // 저장 실패 시에도 앱이 죽지 않도록 (사파리 프라이빗 모드 등)
   }
@@ -19,8 +25,29 @@ export function saveAnalysis(payload: AnalysisPayload): void {
 
 export function loadAnalysis(): AnalysisPayload | null {
   try {
-    const raw = sessionStorage.getItem(KEY);
+    const raw = sessionStorage.getItem(ANALYSIS_KEY);
     return raw ? (JSON.parse(raw) as AnalysisPayload) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 최근 검색 조건은 재방문 편의를 위해 브라우저에 오래 보관한다. */
+export function saveSearchDraft(draft: SearchDraft): void {
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    // 저장 공간이 막혀도 검색 기능 자체는 계속 동작한다.
+  }
+}
+
+export function loadSearchDraft(): SearchDraft | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    const draft = JSON.parse(raw) as Partial<SearchDraft>;
+    if (typeof draft.ticker !== "string" || typeof draft.command !== "string") return null;
+    return { ticker: draft.ticker, command: draft.command };
   } catch {
     return null;
   }

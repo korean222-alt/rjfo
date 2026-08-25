@@ -24,6 +24,7 @@ export type EnrichedBar = Bar & {
   obv: number;
   obv_slope_20d: number | null;
   atr14: number | null;
+  atr_ratio_20d: number | null;
 };
 
 // ── FilterSpec ─────────────────────────────────────────────────────
@@ -38,6 +39,7 @@ export const METRICS = [
   "range_pct",
   "up_down_vol_ratio_20d",
   "obv_slope_20d",
+  "atr_ratio_20d",
 ] as const;
 
 export type Metric = (typeof METRICS)[number];
@@ -51,7 +53,7 @@ export type Condition = {
   value: number;
 };
 
-export type PresetName = "absorption" | "high_close" | "accumulation";
+export type PresetName = "absorption" | "high_close" | "accumulation" | "squeeze";
 
 export type FilterSpec = {
   conditions: Condition[];

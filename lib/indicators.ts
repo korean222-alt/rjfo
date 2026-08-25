@@ -8,6 +8,18 @@ function sma(values: number[], i: number, n: number): number | null {
   return sum / n;
 }
 
+/** null이 하나라도 있으면 계산하지 않는 단순평균. */
+function nullableSma(values: (number | null)[], i: number, n: number): number | null {
+  if (i < n - 1) return null;
+  let sum = 0;
+  for (let k = i - n + 1; k <= i; k++) {
+    const value = values[k];
+    if (value == null) return null;
+    sum += value;
+  }
+  return sum / n;
+}
+
 /** 최근 n개(현재 봉 포함) 모집단 표준편차와 평균. */
 function meanStd(
   values: number[],
@@ -88,6 +100,9 @@ export function enrich(bars: Bar[]): EnrichedBar[] {
   return bars.map((b, i) => {
     const vol_ma20 = sma(volumes, i, 20);
     const vol_ma50 = sma(volumes, i, 50);
+    const atr_ma20 = nullableSma(atr, i, 20);
+    const atr_ratio_20d =
+      atr[i] != null && atr_ma20 != null && atr_ma20 > 0 ? atr[i]! / atr_ma20 : null;
 
     const z60 = meanStd(volumes, i, 60);
     const volume_zscore_60d =
@@ -138,6 +153,7 @@ export function enrich(bars: Bar[]): EnrichedBar[] {
       obv: obv[i],
       obv_slope_20d,
       atr14: atr[i],
+      atr_ratio_20d,
     };
   });
 }

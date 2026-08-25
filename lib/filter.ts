@@ -22,6 +22,8 @@ function metricValue(bar: EnrichedBar, metric: Metric): number | null {
       return bar.up_down_vol_ratio_20d;
     case "obv_slope_20d":
       return bar.obv_slope_20d;
+    case "atr_ratio_20d":
+      return bar.atr_ratio_20d;
   }
 }
 

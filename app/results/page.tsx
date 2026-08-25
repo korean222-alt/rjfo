@@ -3,11 +3,15 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import CommandInput from "@/components/CommandInput";
 import MatchList from "@/components/MatchList";
 import SummaryCard from "@/components/SummaryCard";
+import TickerInput from "@/components/TickerInput";
 import { runAnalyze } from "@/lib/analyze-client";
 import { compactNumber } from "@/lib/format";
-import { loadAnalysis, saveAnalysis, type AnalysisPayload } from "@/lib/session";
+import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
+import { loadAnalysis, loadSearchDraft, saveAnalysis, saveSearchDraft, type AnalysisPayload } from "@/lib/session";
+import type { FilterSpec } from "@/types";
 
 // lightweight-charts는 브라우저 전용
 const VolumeChart = dynamic(() => import("@/components/VolumeChart"), {
@@ -21,11 +25,21 @@ export default function ResultsPage() {
   const [cluster, setCluster] = useState(true);
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [tickerInput, setTickerInput] = useState("");
+  const [commandInput, setCommandInput] = useState("");
+  const [editorError, setEditorError] = useState<string | null>(null);
 
   useEffect(() => {
     const p = loadAnalysis();
+    const draft = loadSearchDraft();
     setPayload(p);
-    if (p) setCluster(p.result.clustered);
+    if (p) {
+      const matchingDraft = draft?.ticker === p.result.ticker ? draft : null;
+      setCluster(p.result.clustered);
+      setTickerInput(matchingDraft?.ticker ?? p.result.ticker);
+      setCommandInput(matchingDraft?.command ?? p.result.spec.interpretation);
+    }
     setLoaded(true);
   }, []);
 
@@ -54,6 +68,42 @@ export default function ResultsPage() {
     },
     [result],
   );
+
+  const reanalyze = useCallback(async () => {
+    setEditorError(null);
+    const ticker = normalizeTicker(tickerInput);
+    if (!ticker) return setEditorError("티커를 입력해 주세요.");
+    if (!isValidTicker(ticker)) return setEditorError("올바른 티커 형식이 아닙니다.");
+    if (!commandInput.trim()) return setEditorError("무엇을 찾을지 입력해 주세요.");
+
+    const command = commandInput.trim();
+    saveSearchDraft({ ticker, command });
+    setBusy(true);
+    try {
+      const parseRes = await fetch("/api/parse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command }),
+      });
+      const parsed = (await parseRes.json()) as { spec?: FilterSpec; error?: string };
+      if (!parseRes.ok || !parsed.spec) {
+        throw new Error(parsed.error ?? "명령을 이해하지 못했어요.");
+      }
+
+      const data = await runAnalyze(ticker, parsed.spec);
+      saveAnalysis(data);
+      setPayload(data);
+      setCluster(data.result.clustered);
+      setTickerInput(ticker);
+      setCommandInput(command);
+      setConfirmed(false);
+      setEditing(false);
+    } catch (e) {
+      setEditorError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [commandInput, tickerInput]);
 
   const exportCsv = useCallback(() => {
     if (!result) return;
@@ -105,7 +155,7 @@ export default function ResultsPage() {
     <main className="mx-auto max-w-lg px-4 py-6 pb-28">
       <div className="mb-4 flex items-center justify-between">
         <Link href="/" className="text-sm text-muted">
-          ← 다시 분석
+          ← 첫 화면
         </Link>
         <button
           type="button"
@@ -115,6 +165,55 @@ export default function ResultsPage() {
           CSV 내보내기
         </button>
       </div>
+
+      <section className="mb-4 rounded-2xl border border-border bg-surface p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs text-muted">현재 분석</p>
+            <p className="truncate text-base font-bold">{result.ticker}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setEditing((open) => !open)}
+            aria-expanded={editing}
+            className="shrink-0 rounded-lg border border-border bg-bg px-3 py-2 text-sm font-medium"
+          >
+            {editing ? "닫기" : "티커·명령 수정"}
+          </button>
+        </div>
+
+        {editing ? (
+          <div className="mt-4 space-y-4 border-t border-border pt-4">
+            <TickerInput
+              value={tickerInput}
+              onChange={(next) => {
+                setTickerInput(next);
+                saveSearchDraft({ ticker: next, command: commandInput });
+              }}
+            />
+            <CommandInput
+              value={commandInput}
+              onChange={(next) => {
+                setCommandInput(next);
+                saveSearchDraft({ ticker: tickerInput, command: next });
+              }}
+            />
+            {editorError ? (
+              <p className="rounded-xl border border-down/40 bg-down/10 px-4 py-3 text-sm text-down">
+                {editorError}
+              </p>
+            ) : null}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={reanalyze}
+              className="w-full rounded-xl bg-blue-500 py-3 text-sm font-bold text-white disabled:opacity-50"
+            >
+              {busy ? "분석 중…" : "이 조건으로 다시 분석"}
+            </button>
+          </div>
+        ) : null}
+      </section>
 
       {/* lookahead는 미래 데이터를 보는 것이므로 반드시 명시한다 */}
       {result.lookaheadUsed ? (

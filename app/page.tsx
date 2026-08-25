@@ -1,12 +1,12 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import CommandInput from "@/components/CommandInput";
 import TickerInput from "@/components/TickerInput";
 import { runAnalyze } from "@/lib/analyze-client";
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
-import { saveAnalysis } from "@/lib/session";
+import { loadSearchDraft, saveAnalysis, saveSearchDraft } from "@/lib/session";
 import type { FilterSpec } from "@/types";
 
 export default function Home() {
@@ -17,6 +17,13 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<null | "parse" | "analyze" | "fallback">(null);
 
+  useEffect(() => {
+    const draft = loadSearchDraft();
+    if (!draft) return;
+    setTicker(draft.ticker);
+    setCommand(draft.command);
+  }, []);
+
   async function run() {
     setError(null);
     setTickerError(null);
@@ -26,13 +33,16 @@ export default function Home() {
     if (!isValidTicker(t)) return setTickerError("올바른 티커 형식이 아닙니다.");
     if (!command.trim()) return setError("무엇을 찾을지 입력해 주세요.");
 
+    const nextCommand = command.trim();
+    saveSearchDraft({ ticker: t, command: nextCommand });
+
     try {
       // 1) 자연어 → FilterSpec (Claude는 파싱만 한다)
       setBusy("parse");
       const parseRes = await fetch("/api/parse", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: command.trim() }),
+        body: JSON.stringify({ command: nextCommand }),
       });
       const parsed = (await parseRes.json()) as { spec?: FilterSpec; error?: string };
       if (!parseRes.ok || !parsed.spec) {
@@ -65,8 +75,21 @@ export default function Home() {
       </header>
 
       <div className="space-y-6">
-        <TickerInput value={ticker} onChange={setTicker} error={tickerError} />
-        <CommandInput value={command} onChange={setCommand} />
+        <TickerInput
+          value={ticker}
+          onChange={(next) => {
+            setTicker(next);
+            saveSearchDraft({ ticker: next, command });
+          }}
+          error={tickerError}
+        />
+        <CommandInput
+          value={command}
+          onChange={(next) => {
+            setCommand(next);
+            saveSearchDraft({ ticker, command: next });
+          }}
+        />
 
         {error ? (
           <p className="rounded-xl border border-down/40 bg-down/10 px-4 py-3 text-sm text-down">

@@ -97,6 +97,13 @@ console.log("\n[1] 파생 지표");
   let naiveAtr = tr.slice(1, 15).reduce((a, b) => a + b, 0) / 14;
   for (let i = 15; i <= 60; i++) naiveAtr = (naiveAtr * 13 + tr[i]) / 14;
   approx(e[60].atr14, naiveAtr, 1e-9, "atr14 (naive Wilder 대조)");
+
+  // atr_ratio_20d = 현재 ATR ÷ 최근 20개 ATR 평균 (ATR가 준비된 14~60번 봉)
+  const atrWindow = e.slice(41, 61).map((bar) => bar.atr14 as number);
+  const atrMean = atrWindow.reduce((sum, value) => sum + value, 0) / atrWindow.length;
+  approx(e[60].atr_ratio_20d, (e[60].atr14 as number) / atrMean, 1e-9, "atr_ratio_20d");
+  assert(e[32].atr_ratio_20d === null, "ATR 비율 워밍업 구간은 null");
+  assert(e[33].atr_ratio_20d !== null, "34번째 봉부터 ATR 비율 계산됨");
 }
 
 console.log("\n[2] high == low 봉 (0으로 나누기 방어)");
@@ -180,6 +187,12 @@ console.log("\n[6] AND / OR 로직");
   });
   assert(and.length === 1, "AND → 1일");
   assert(or.length > and.length, `OR → ${or.length}일 (AND보다 많음)`);
+
+  const atrReady = applyFilter(e, {
+    ...base,
+    conditions: [{ metric: "atr_ratio_20d", op: ">=", value: 0 }],
+  });
+  assert(atrReady.length === bars.length - 33, "ATR 비율 조건은 워밍업 이후 봉만 통과");
 }
 
 console.log(
