@@ -8,8 +8,7 @@ import type { FilterSpec } from "@/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const EXAMPLE_HINT =
-  '예: "거래량 폭발", "물량 흡수", "고가 마감", "누적 매집", "상승 전 압축", "강한 돌파"';
+const EXAMPLE_HINT = `예: ${PRESET_CHIPS.map((c) => `"${c.label}"`).join(", ")}`;
 
 /** few-shot을 대화 형태로 넣는다. */
 function fewShotHistory(): GeminiTurn[] {
@@ -35,7 +34,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "명령이 너무 깁니다 (500자 이내)." }, { status: 400 });
   }
 
-  // 카드 선택 명령은 AI 해석을 거치지 않는다. 화면에 표시한 조건을 그대로 사용한다.
+  // 빠른 신호는 AI 해석을 거치지 않는다. 칩에 적힌 조건을 그대로 쓴다 (결과가 항상 같다).
   const selected = PRESET_CHIPS.find((chip) => chip.command === command);
   if (selected) {
     const spec: FilterSpec = {
@@ -43,7 +42,7 @@ export async function POST(req: Request) {
       logic: "AND",
       preset: selected.preset,
       lookahead: selected.lookahead,
-      interpretation: `${selected.label}: ${selected.description}`,
+      interpretation: `${selected.label}: ${selected.hint}`,
       confidence: selected.lookahead ? "low" : "high",
     };
     return NextResponse.json({ spec, model: "preset" });

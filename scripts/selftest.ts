@@ -9,7 +9,8 @@
 import { enrich } from "../lib/indicators";
 import { applyFilter, clusterIndices } from "../lib/filter";
 import { analyze, forwardReturn, maxForwardReturn } from "../lib/stats";
-import { PRESET_CONDITIONS } from "../lib/presets";
+import { checkLatest, formatAlert } from "../lib/alerts/evaluate";
+import { PRESET_CHIPS, PRESET_CONDITIONS } from "../lib/presets";
 import type { Bar, FilterSpec, PresetName } from "../types";
 
 let failures = 0;
@@ -48,6 +49,35 @@ function fixture(): Bar[] {
       volume,
     });
     close *= 1.001;
+  }
+  return bars;
+}
+
+/**
+ * 실제 종목에 가까운 결정론적 픽스처.
+ * 고정 시드 LCG로 만든 무작위 워크 + 로그정규에 가까운 거래량 분포.
+ * "이 신호가 현실에서 가끔은 걸리는가"를 확인하는 용도다.
+ */
+function noisyFixture(n: number): Bar[] {
+  let seed = 20260825;
+  const rand = () => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  };
+
+  const bars: Bar[] = [];
+  let close = 100;
+  for (let i = 0; i < n; i++) {
+    const d = new Date(Date.UTC(2020, 0, 1 + i));
+    const drift = (rand() - 0.48) * 0.04; // 살짝 상승 편향
+    const open = close;
+    close = Math.max(1, close * (1 + drift));
+    const spread = close * (0.005 + rand() * 0.02);
+    const high = Math.max(open, close) + spread * rand();
+    const low = Math.min(open, close) - spread * rand();
+    // 거래량은 우측 꼬리가 길게 (가끔 크게 터지도록)
+    const volume = Math.round(1_000_000 * Math.exp((rand() - 0.5) * 1.4) * (rand() < 0.05 ? 3 : 1));
+    bars.push({ date: d.toISOString().slice(0, 10), open, high, low, close, volume });
   }
   return bars;
 }
@@ -196,43 +226,82 @@ console.log("\n[6] AND / OR 로직");
   assert(atrReady.length === bars.length - 33, "ATR 비율 조건은 워밍업 이후 봉만 통과");
 }
 
-console.log("\n[7] 빠른 신호 프리셋");
+console.log("\n[7] 빠른 신호 — 실제로 걸리는가");
 {
-  const expected: PresetName[] = [
-    "absorption",
-    "accumulation",
-    "squeeze",
-    "high_close",
-    "strong_breakout",
-    "volume_expansion",
-    "flow_improvement",
-  ];
+  // 조건이 하나라도 유효해야 필터가 전체를 버리지 않는다.
+  const names: PresetName[] = ["absorption", "high_close", "accumulation"];
   assert(
-    expected.every((name) => PRESET_CONDITIONS[name].length > 0),
-    "모든 빠른 신호가 하나 이상의 유효 조건을 가짐",
-  );
-  assert(PRESET_CONDITIONS.absorption.length === 2, "기존 물량 흡수는 두 조건을 유지");
-  assert(
-    PRESET_CONDITIONS.absorption[0].metric === "volume_ratio_20d" &&
-      PRESET_CONDITIONS.absorption[0].value === 2 &&
-      PRESET_CONDITIONS.absorption[1].metric === "abs_close_change_pct" &&
-      PRESET_CONDITIONS.absorption[1].value === 2,
-    "기존 물량 흡수 = 20일 평균 거래량 2배 이상 · 종가 변동 ±2% 이내",
+    names.every((name) => PRESET_CONDITIONS[name].length > 0),
+    "모든 프리셋이 하나 이상의 유효 조건을 가짐",
   );
   assert(
-    PRESET_CONDITIONS.high_close.length === 2 &&
-      PRESET_CONDITIONS.high_close[0].value === 1.8 &&
-      PRESET_CONDITIONS.high_close[1].value === 0.75,
-    "기존 고가 마감 = 거래량 1.8배 이상 · 종가 위치 0.75 이상",
+    PRESET_CHIPS.every((chip) => chip.conditions.length > 0 && chip.conditions.length <= 2),
+    "빠른 신호는 조건 2개 이하 — 조건을 겹칠수록 매칭이 0에 수렴한다",
   );
+
+  // 임계값이 다시 조여지는 것을 막는 회귀 테스트.
+  // 무작위 워크 픽스처에서 각 신호가 최소 2%의 날에는 걸려야 한다.
+  const bars = noisyFixture(600);
+  const e = enrich(bars);
+  const eligible = bars.length - 60; // 지표 워밍업 구간 제외
+
+  for (const chip of PRESET_CHIPS) {
+    if (chip.lookahead) continue; // 미래를 보는 신호는 별도 성격
+    const hits = applyFilter(e, {
+      conditions: chip.conditions,
+      logic: "AND",
+      preset: chip.preset,
+      interpretation: chip.label,
+      confidence: "high",
+    });
+    const rate = (hits.length / eligible) * 100;
+    assert(rate >= 2, `${chip.label}: ${hits.length}일 매칭 (${rate.toFixed(1)}%, 2% 이상 필요)`);
+  }
+}
+
+console.log("\n[8] 알림 판정 (마지막 봉)");
+{
+  const all = noisyFixture(400);
+
+  // checkLatest는 분석 화면과 같은 필터를 써야 한다.
+  // 전체 구간의 매칭일 집합과, 그 날짜에서 잘라낸 시계열의 마지막 봉 판정이 일치해야 한다.
+  const full = enrich(all);
+  for (const chip of PRESET_CHIPS) {
+    if (chip.lookahead) continue;
+    const matched = new Set(
+      applyFilter(full, {
+        conditions: chip.conditions,
+        logic: "AND",
+        preset: chip.preset,
+        interpretation: chip.label,
+        confidence: "high",
+      }).map((i) => full[i].date),
+    );
+
+    let disagreements = 0;
+    let fired = 0;
+    for (let end = 120; end <= all.length; end++) {
+      const sliced = enrich(all.slice(0, end));
+      const date = sliced[sliced.length - 1].date;
+      const hit = checkLatest(sliced, chip.key) !== null;
+      if (hit) fired++;
+      if (hit !== matched.has(date)) disagreements++;
+    }
+    assert(
+      disagreements === 0 && fired > 0,
+      `${chip.label}: 마지막 봉 판정이 전체 필터와 일치 (${fired}회 발동, 불일치 ${disagreements})`,
+    );
+  }
+
+  // lookahead 신호는 미래를 봐야 하므로 실시간 판정 대상이 아니다.
+  assert(checkLatest(full, "pre_surge") === null, "급등 직전은 알림으로 판정하지 않음");
+
+  const hit = checkLatest(full, "absorption") ?? checkLatest(full, "high_close");
+  const message = hit ? formatAlert("TEST", [hit]) : "";
   assert(
-    PRESET_CONDITIONS.accumulation.length === 2 &&
-      PRESET_CONDITIONS.accumulation[0].value === 1.5 &&
-      PRESET_CONDITIONS.accumulation[1].value === 0.3,
-    "기존 누적 매집 = 상승·하락일 거래량 비율 1.5 이상 · OBV 기울기 0.3 이상",
+    message.includes("TEST") && message.includes(full[full.length - 1].date),
+    "알림 메시지에 티커와 날짜가 들어감",
   );
-  assert(PRESET_CONDITIONS.strong_breakout.length === 3, "강한 돌파는 거래량·가격·고가권 마감 조건을 사용");
-  assert(PRESET_CONDITIONS.flow_improvement.length === 2, "수급 개선은 상승일 수급·OBV 조건을 사용");
 }
 
 console.log(

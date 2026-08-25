@@ -10,6 +10,7 @@ import TickerInput from "@/components/TickerInput";
 import { runAnalyze } from "@/lib/analyze-client";
 import { compactNumber } from "@/lib/format";
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
+import { ALERT_SIGNALS } from "@/lib/presets";
 import { loadAnalysis, loadSearchDraft, saveAnalysis, saveSearchDraft, type AnalysisPayload } from "@/lib/session";
 import type { FilterSpec } from "@/types";
 
@@ -49,6 +50,17 @@ export default function ResultsPage() {
     () => (result ? result.matches.map((m) => m.date) : []),
     [result],
   );
+
+  // 빠른 신호로 분석했을 때만 알림 등록을 권한다. 직접 쓴 조건은 임계값이 달라서
+  // 알림(프리셋 기준)과 화면(사용자 조건)이 서로 다른 말을 하게 된다.
+  const alertSignal = useMemo(() => {
+    if (!result) return null;
+    return (
+      ALERT_SIGNALS.find(
+        (chip) => result.spec.interpretation === `${chip.label}: ${chip.hint}`,
+      ) ?? null
+    );
+  }, [result]);
 
   // 클러스터 토글은 서버에서 다시 계산한다 (계산은 전부 서버 코드가 한다)
   const toggleCluster = useCallback(
@@ -153,17 +165,27 @@ export default function ResultsPage() {
 
   return (
     <main className="mx-auto max-w-lg px-4 py-6 pb-28">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between gap-2">
         <Link href="/" className="text-sm text-muted">
           ← 첫 화면
         </Link>
-        <button
-          type="button"
-          onClick={exportCsv}
-          className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-muted"
-        >
-          CSV 내보내기
-        </button>
+        <div className="flex gap-2">
+          {alertSignal ? (
+            <Link
+              href={`/alerts?ticker=${encodeURIComponent(result.ticker)}&signal=${alertSignal.key}`}
+              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-muted"
+            >
+              🔔 이 신호 알림
+            </Link>
+          ) : null}
+          <button
+            type="button"
+            onClick={exportCsv}
+            className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-muted"
+          >
+            CSV 내보내기
+          </button>
+        </div>
       </div>
 
       <section className="mb-4 rounded-2xl border border-border bg-surface p-4">

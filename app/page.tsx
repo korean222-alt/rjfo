@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import CommandInput from "@/components/CommandInput";
@@ -67,11 +68,19 @@ export default function Home() {
 
   return (
     <main className="mx-auto max-w-lg px-4 py-8 pb-24">
-      <header className="mb-7">
-        <h1 className="text-2xl font-black">거래량 분석기</h1>
-        <p className="mt-1.5 text-sm text-muted leading-relaxed">
-          조건에 걸린 날의 이후 성과를, 아무 날이나 골랐을 때의 성과와 나란히 비교합니다.
-        </p>
+      <header className="mb-7 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-black">거래량 분석기</h1>
+          <p className="mt-1.5 text-sm text-muted leading-relaxed">
+            조건에 걸린 날의 이후 성과를, 아무 날이나 골랐을 때의 성과와 나란히 비교합니다.
+          </p>
+        </div>
+        <Link
+          href="/alerts"
+          className="shrink-0 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-muted"
+        >
+          🔔 알림
+        </Link>
       </header>
 
       <div className="space-y-6">
