@@ -152,11 +152,12 @@ export default function VolumeChart({ series, matchDates, maPeriods = [], extraM
       .filter((p) => byDate.has(p.date))
       .map((p) => {
         const m = byDate.get(p.date)!;
+        const position = (m.position ?? "belowBar") as "aboveBar" | "belowBar";
         return {
           time: p.date as unknown as UTCTimestamp,
-          position: (m.position ?? "belowBar") as "aboveBar" | "belowBar",
+          position,
           color: m.color ?? "#60a5fa",
-          shape: "arrowUp" as const,
+          shape: (position === "aboveBar" ? "arrowDown" : "arrowUp") as "arrowDown" | "arrowUp",
           text: m.label ?? "신호",
         };
       });

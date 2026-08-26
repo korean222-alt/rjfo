@@ -97,9 +97,9 @@ Vercel 대시보드 → Storage에서 KV(Upstash Redis) 스토어를 만들어 �
 
 1. 마지막으로 성공한 모델 (`workingModel` — 람다 인스턴스가 기억)
 2. `gemini-flash-latest` — 구글이 계속 최신 flash로 가리켜주는 별칭
-3. 정적 후보: `gemini-2.5-flash` → `gemini-2.0-flash` → `gemini-1.5-flash`
+3. 정적 후보: `gemini-flash-lite-latest` → `gemini-3.6-flash` → `gemini-3.5-flash` → lite/preview → 구형 2.5/2.0/1.5
 4. 그래도 전부 막히면 `/v1beta/models`를 조회해 이 키로 **실제 쓸 수 있는** 모델을 찾는다
-   (flash 계열 우선)
+   (flash 계열 우선, TTS·이미지·임베딩은 제외)
 
 **실패 처리**
 

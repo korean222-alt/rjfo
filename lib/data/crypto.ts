@@ -90,6 +90,8 @@ async function fromOkx(inst: string, years: number): Promise<Bar[]> {
     if (json.code !== "0" || !json.data?.length) break;
     for (const row of json.data) {
       const ts = Number(row[0]);
+      // confirm(row[8])이 있으면 미완성 봉은 버린다. 알림이 당일 진행 중 봉을 보지 않게.
+      if (row[8] === "0") continue;
       rows.push({
         date: utcDate(ts),
         open: Number(row[1]),

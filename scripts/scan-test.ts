@@ -5,6 +5,8 @@
 import { toDailyFunding } from "../lib/data/funding";
 import { enrich } from "../lib/indicators";
 import { parseAssistantIntent } from "../lib/assistant-intent";
+import { isCryptoTicker, normalizeTicker } from "../lib/data/provider";
+import { parseLocalCommand } from "../lib/parse-local";
 import { scanMaBreakout, scanSurgePrelude } from "../lib/scan";
 import { applyFilter } from "../lib/filter";
 import { PRESET_CONDITIONS } from "../lib/presets";
@@ -96,6 +98,8 @@ console.log("\n[4] 한국어 명령 파싱");
   const d = parseAssistantIntent("ma 365일선 차트에 표시해줘");
   assert(d.kind === "draw_ma", `선만 그리기 (${d.kind})`);
   if (d.kind === "draw_ma") assert(d.period === 365, `draw 365 ${d.period}`);
+  const e = parseAssistantIntent("MA 200일선 돌파 30일 후");
+  assert(e.kind === "ma_breakout" && !(e.kind === "ma_breakout" && e.ticker === "MA"), "MA를 티커로 오인하지 않음");
 }
 
 console.log("\n[5] 펀딩 과열 필터");
@@ -155,6 +159,27 @@ console.log("\n[6] 펀딩 극단 숏은 펀딩이 음수일 때만");
     confidence: "high",
   });
   assert(realShort.includes(80), "마이너스 펀딩 + 극단 z 는 숏 신호");
+}
+
+console.log("\n[7] 로컬 명령 파싱 (Gemini 없이)");
+{
+  const label = parseLocalCommand("거래량 폭발");
+  const first = label?.conditions[0];
+  assert(Boolean(first && "metric" in first && first.metric === "volume_ratio_20d"), "칩 라벨 매칭");
+  assert((label?.conditions[0] as { value?: number }).value === 3, "거래량 폭발 3배");
+
+  const free = parseLocalCommand("거래량이 평균의 두 배 넘고 종가가 오른 날");
+  assert(free?.conditions.length === 2, `배수+상승 조건 ${free?.conditions.length}`);
+  const metrics = (free?.conditions ?? []).map((c) => ("metric" in c ? c.metric : c.kind));
+  assert(metrics.includes("volume_ratio_20d") && metrics.includes("close_change_pct"), "거래량 배수 + 종가 상승");
+
+  const heat = parseLocalCommand("비트코인 펀딩 과열인 날 찾아줘");
+  assert(heat?.preset === "funding_heat", `펀딩 과열 preset ${heat?.preset}`);
+
+  const none = parseLocalCommand("내일 오를 종목 찍어줘");
+  assert(none === null, "애매한 문장은 Gemini로 넘긴다");
+  assert(normalizeTicker("SOL") === "SOL-USD" && isCryptoTicker("SOL-USD"), "SOL 별칭");
+  assert(normalizeTicker("도지") === "DOGE-USD", "도지 별칭");
 }
 
 console.log(failures === 0 ? "\n✅ 전부 통과\n" : `\n❌ ${failures}개 실패\n`);

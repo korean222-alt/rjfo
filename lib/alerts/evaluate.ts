@@ -10,6 +10,10 @@ export type SignalHit = {
   bar: EnrichedBar;
 };
 
+function utcToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export function checkLatest(
   bars: EnrichedBar[],
   signal: SignalKey,
@@ -19,7 +23,8 @@ export function checkLatest(
   if (!spec) return null;
   if (!bars.length) return null;
 
-  const last = bars.length - 1;
+  let last = bars.length - 1;
+  if (bars[last].date === utcToday() && last > 0) last -= 1;
   const matched = applyFilter(bars, spec).includes(last);
   return matched ? { signal, label: spec.interpretation, bar: bars[last] } : null;
 }

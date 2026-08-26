@@ -1,6 +1,7 @@
 import { json } from "@/lib/json-response";
 import { generateText, GeminiError, type GeminiTurn } from "@/lib/gemini";
 import { parseMaCommand } from "@/lib/ma";
+import { parseLocalCommand } from "@/lib/parse-local";
 import { FEW_SHOT, PARSER_SYSTEM_PROMPT } from "@/lib/parse-prompt";
 import { extractJson, validateSpec } from "@/lib/validate-spec";
 import { PRESET_CHIPS } from "@/lib/presets";
@@ -8,6 +9,7 @@ import type { FilterSpec } from "@/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 const EXAMPLE_HINT = `예: ${PRESET_CHIPS.map((c) => `"${c.label}"`).join(", ")}`;
 
@@ -34,7 +36,9 @@ export async function POST(req: Request) {
     return json({ error: "명령이 너무 깁니다 (500자 이내)." }, { status: 400 });
   }
 
-  const selected = PRESET_CHIPS.find((chip) => chip.command === command);
+  const selected = PRESET_CHIPS.find(
+    (chip) => chip.command === command || chip.label === command,
+  );
   if (selected) {
     const spec: FilterSpec = {
       conditions: selected.conditions,
@@ -50,6 +54,11 @@ export async function POST(req: Request) {
   const maSpec = parseMaCommand(command);
   if (maSpec) {
     return json({ spec: maSpec, model: "ma" });
+  }
+
+  const localSpec = parseLocalCommand(command);
+  if (localSpec) {
+    return json({ spec: localSpec, model: "local" });
   }
 
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;

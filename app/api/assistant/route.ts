@@ -52,12 +52,13 @@ function templateSurge(ticker: string, s: ReturnType<typeof scanSurgePrelude>, w
     .join(" ");
 }
 
-function templateBreakout(ticker: string, s: ReturnType<typeof scanMaBreakout>, period: number, holdDays: number) {
+function templateBreakout(ticker: string, s: ReturnType<typeof scanMaBreakout>, period: number, holdDays: number, direction: "up" | "down") {
   const n = s.summary.count ?? 0;
-  if (!n) return `${ticker}에서 ${period}일선 상향 돌파를 찾지 못했습니다.`;
+  const way = direction === "down" ? "하향" : "상향";
+  if (!n) return `${ticker}에서 ${period}일선 ${way} 돌파를 찾지 못했습니다.`;
   const samples = s.events.slice(-3).map((e) => `${e.date}${e.forwardPct != null ? ` (${e.forwardPct >= 0 ? "+" : ""}${e.forwardPct.toFixed(1)}%)` : ""}`).join(", ");
   return [
-    `${ticker}의 ${period}일선 상향 돌파는 ${n}번입니다.`,
+    `${ticker}의 ${period}일선 ${way} 돌파는 ${n}번입니다.`,
     `돌파 후 ${holdDays}일 평균 수익률은 ${fmt(s.summary.avgForward)}%, 중앙값은 ${fmt(s.summary.medianForward)}%, 플러스인 비율은 ${fmt(s.summary.winShare)}%입니다.`,
     `아무 날이나 골랐을 때와 비교하려면 결과 카드의 기준선(base rate)을 보세요.`,
     `최근 돌파: ${samples}.`,
@@ -73,6 +74,7 @@ async function polish(facts: string, user: string): Promise<string | null> {
       apiKey,
       system: SYSTEM,
       prompt: `사용자: ${user}\n\nFACTS:\n${facts}\n\n이 FACTS만 가지고 답해라.`,
+      json: false,
       maxOutputTokens: 512,
       deadlineMs: 8_000,
     });
@@ -173,7 +175,7 @@ export async function POST(req: Request) {
     interpretation = `${intent.period}일선 ${intent.direction === "down" ? "하향" : "상향"} 돌파 후 ${intent.holdDays}일`;
     markers = scan.markers;
     dates = scan.events.map((e) => e.date);
-    reply = templateBreakout(ticker, scan, intent.period, intent.holdDays);
+    reply = templateBreakout(ticker, scan, intent.period, intent.holdDays, intent.direction);
     facts = JSON.stringify(scan.summary);
   }
 

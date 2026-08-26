@@ -45,7 +45,7 @@ export async function GET(req: Request) {
     try {
       const bars = await attachFunding(ticker, await loadBars(ticker, { forceFresh: true }));
       if (bars.length < 60) {
-        notes.push(`${ticker}: 데이터 ${bars.length}일치뿐이라 건너뛄`);
+        notes.push(`${ticker}: 데이터 ${bars.length}일치뿐이라 건너뜀`);
         continue;
       }
       enriched = enrich(bars);

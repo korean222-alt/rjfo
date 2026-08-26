@@ -37,13 +37,17 @@ const NAME_TO_TICKER: Record<string, string> = {
   솔라나: "SOL-USD",
 };
 
+const RESERVED = new Set(["MA", "SMA", "EMA", "ATR", "OBV", "USD", "USDT"]);
+
 function pickTicker(text: string): string | undefined {
   for (const [name, ticker] of Object.entries(NAME_TO_TICKER)) {
     if (text.includes(name)) return ticker;
   }
   const m = text.match(/\b([A-Z]{1,5}(?:-USD)?)\b/);
   if (m) {
-    const t = normalizeTicker(m[1]);
+    const raw = m[1];
+    if (RESERVED.has(raw) && !raw.endsWith("-USD")) return undefined;
+    const t = normalizeTicker(raw);
     if (isValidTicker(t)) return t;
   }
   return undefined;

@@ -58,7 +58,7 @@ export async function GET(req: Request) {
       DATA_PROVIDER: process.env.DATA_PROVIDER ?? null,
       DATA_DEADLINE_MS: process.env.DATA_DEADLINE_MS ?? null,
       hasKv: kvConfigured(),
-      hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
+      hasGeminiKey: Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
       hasTwelveDataKey: Boolean(process.env.TWELVE_DATA_API_KEY),
     },
     sources,

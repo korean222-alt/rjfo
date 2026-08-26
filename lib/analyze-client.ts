@@ -22,13 +22,26 @@ export type AnalyzeOptions = {
   onFallback?: () => void;
 };
 
+async function readJson(res: Response): Promise<AnalysisPayload & { error?: string }> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as AnalysisPayload & { error?: string };
+  } catch {
+    const error =
+      res.status === 504 || res.status === 408
+        ? "서버 응답이 너무 느립니다. 잠시 후 다시 시도해 주세요."
+        : `분석 서버 오류 (HTTP ${res.status}).`;
+    return { error } as AnalysisPayload & { error?: string };
+  }
+}
+
 async function postAnalyze(body: Record<string, unknown>) {
   const res = await fetch("/api/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const payload = (await res.json()) as AnalysisPayload & { error?: string };
+  const payload = await readJson(res);
   return { res, payload };
 }
 

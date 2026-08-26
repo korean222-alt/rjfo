@@ -81,36 +81,51 @@ export class TwelveDataProvider implements DataProvider {
       `${BASE}?symbol=${encodeURIComponent(ticker)}` +
       `&interval=1day&outputsize=${outputsize}&order=ASC&apikey=${encodeURIComponent(key)}`;
 
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        headers: { Accept: "application/json" },
-        cache: "no-store",
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-    } catch (e) {
-      throw new DataProviderError(
-        `시세 서버에 연결하지 못했습니다: ${(e as Error).message}`,
-        502,
-      );
+    let res: Response | null = null;
+    let json: TwelveResponse | null = null;
+    let lastStatus = 0;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        res = await fetch(url, {
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+        lastStatus = res.status;
+      } catch (e) {
+        if (attempt === 0) continue;
+        throw new DataProviderError(
+          `시세 서버에 연결하지 못했습니다: ${(e as Error).message}`,
+          502,
+        );
+      }
+
+      if (!res) continue;
+
+      try {
+        json = (await res.json()) as TwelveResponse;
+        break;
+      } catch {
+        if (attempt === 0) continue;
+        throw new DataProviderError(
+          `시세 서버 응답을 읽지 못했습니다 (HTTP ${lastStatus}).`,
+          lastStatus === 429 ? 429 : 502,
+        );
+      }
     }
 
-    let json: TwelveResponse;
-    try {
-      json = (await res.json()) as TwelveResponse;
-    } catch {
-      // 한도 초과·차단은 JSON이 아니라 평문으로 올 때가 있다. 본문을 못 읽는다고
-      // 전부 502로 뭉뚱그리면 "한도 초과"라는 진짜 원인이 사라진다.
+    if (!json) {
       throw new DataProviderError(
-        `시세 서버 응답을 읽지 못했습니다 (HTTP ${res.status}).`,
-        res.status === 429 ? 429 : 502,
+        `시세 서버 응답을 읽지 못했습니다 (HTTP ${lastStatus}).`,
+        lastStatus === 429 ? 429 : 502,
       );
     }
 
     // Twelve Data는 오류도 HTTP 200에 담아 보낼 때가 있다. 본문의 status를 먼저 본다.
-    if (json.status === "error" || (!res.ok && !json.values)) {
-      const code = json.code ?? res.status;
-      const message = json.message ?? `HTTP ${res.status}`;
+    if (json.status === "error" || (lastStatus !== 0 && lastStatus >= 400 && !json.values)) {
+      const code = json.code ?? lastStatus;
+      const message = json.message ?? `HTTP ${lastStatus}`;
       // 무료 플랜에서 막힌 심볼·거래소는 "키가 틀렸다"가 아니다. 키를 넣었는데도 계속
       // 실패한다면 대개 이쪽이므로, 무엇을 해야 하는지 알 수 있게 따로 구분한다.
       if (/plan|upgrade|exclusively|subscription/i.test(message)) {

@@ -15,13 +15,36 @@ export const LATEST_ALIAS = "gemini-flash-latest";
 
 /** 별칭이 막혔을 때의 정적 후보 (최신 → 구형 순). */
 export const STATIC_CANDIDATES = [
+  "gemini-flash-lite-latest",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+  "gemini-3-flash-preview",
   "gemini-2.5-flash",
   "gemini-2.0-flash",
   "gemini-1.5-flash",
 ];
 
 const DEFAULT_DEADLINE_MS = 15_000;
-const PER_ATTEMPT_CAP_MS = 9_000;
+const PER_ATTEMPT_CAP_MS = 5_500;
+
+const NON_CHAT =
+  /tts|embed|image|imagen|veo|lyria|audio|live|robotics|computer-use|native-audio/i;
+
+export function isUsableChatModel(name: string): boolean {
+  if (!name || !name.toLowerCase().includes("gemini")) return false;
+  return !NON_CHAT.test(name);
+}
+
+function rankChatModel(name: string): number {
+  const n = name.toLowerCase();
+  if (n.includes("lite") && n.includes("latest")) return 0;
+  if (n.includes("flash") && n.includes("latest")) return 1;
+  if (n.includes("lite") && n.includes("flash")) return 2;
+  if (n.includes("flash")) return 3;
+  return 4;
+}
 
 // ── 람다 인스턴스 단위 상태 ────────────────────────────────────────
 /** 마지막으로 성공한 모델. 다음 요청은 여기서 먼저 시도한다. */
@@ -206,12 +229,10 @@ async function discoverModels(apiKey: string, timeoutMs: number): Promise<string
     const usable = (body.models ?? [])
       .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
       .map((m) => (m.name ?? "").replace(/^models\//, ""))
-      .filter(Boolean);
+      .filter(isUsableChatModel)
+      .sort((a, b) => rankChatModel(a) - rankChatModel(b) || a.localeCompare(b));
 
-    // flash 계열을 먼저 (싸고 빠르다), 그 다음 나머지.
-    const flash = usable.filter((n) => n.includes("flash"));
-    const rest = usable.filter((n) => !n.includes("flash"));
-    discoveredModels = [...flash, ...rest];
+    discoveredModels = usable;
     return discoveredModels;
   } catch {
     return [];
@@ -234,7 +255,7 @@ export async function generateText(opts: GenerateOptions): Promise<GenerateResul
   const remaining = () => deadline - Date.now();
 
   async function tryOne(model: string): Promise<GenerateResult | null> {
-    let useJsonMime = opts.json !== false;
+    let useJsonMime = opts.json === true;
 
     for (let round = 0; round < 2; round++) {
       const left = remaining();

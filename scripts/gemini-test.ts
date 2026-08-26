@@ -101,7 +101,7 @@ async function main() {
       calls.filter((c) => c === LATEST_ALIAS).length === 1,
       "429 모델은 정확히 1회만 호출 (재시도 없음)",
     );
-    assert(r.model === "gemini-2.5-flash", `다음 후보로 넘어감 (${r.model})`);
+    assert(r.model === "gemini-flash-lite-latest", `다음 후보로 넘어감 (${r.model})`);
   }
 
   console.log("\n[3] 5xx는 같은 모델 1회 재시도 후 다음 모델");
@@ -113,7 +113,7 @@ async function main() {
       calls.filter((c) => c === LATEST_ALIAS).length === 2,
       "5xx 모델은 2회 호출 (1회 재시도)",
     );
-    assert(r.model === "gemini-2.5-flash", "그래도 실패하면 다음 후보");
+    assert(r.model === "gemini-flash-lite-latest", "그래도 실패하면 다음 후보");
   }
 
   console.log("\n[4] 5xx가 재시도에서 성공하면 그대로 사용");
@@ -157,12 +157,30 @@ async function main() {
   {
     __resetGeminiState();
     mockFetch(
-      (model) => (model === "gemini-3-flash-preview" ? { status: 200 } : { status: 404 }),
-      ["gemini-3-flash-preview", "gemini-pro-something"],
+      (model) => (model === "gemini-3-flash-discovered" ? { status: 200 } : { status: 404 }),
+      ["gemini-3-flash-discovered", "gemini-pro-something"],
     );
     const r = await generateText(baseOpts);
     assert(calls.includes("LIST"), "/models 조회를 실제로 수행");
-    assert(r.model === "gemini-3-flash-preview", `조회된 모델로 성공 (${r.model})`);
+    assert(r.model === "gemini-3-flash-discovered", `조회된 모델로 성공 (${r.model})`);
+  }
+
+  console.log("\n[8b] /models 조회에서 TTS·이미지 모델은 건너뛴다");
+  {
+    __resetGeminiState();
+    mockFetch(
+      (model) => {
+        if (model.includes("tts") || model.includes("image")) return { status: 400 };
+        if (model === "gemini-3-pro-something") return { status: 200 };
+        return { status: 404 };
+      },
+      ["gemini-2.5-flash-preview-tts", "gemini-2.5-flash-image", "gemini-3-pro-something"],
+    );
+    const r = await generateText(baseOpts);
+    assert(calls.includes("LIST"), "TTS 필터 테스트도 /models 조회");
+    assert(!calls.includes("gemini-2.5-flash-preview-tts"), "TTS 모델을 호출하지 않음");
+    assert(!calls.includes("gemini-2.5-flash-image"), "이미지 모델을 호출하지 않음");
+    assert(r.model === "gemini-3-pro-something", `텍스트 모델로 성공 (${r.model})`);
   }
 
   console.log("\n[8] 전부 실패하면 사람이 읽을 수 있는 에러");
