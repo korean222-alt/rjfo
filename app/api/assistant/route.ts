@@ -77,7 +77,8 @@ async function polish(facts: string, user: string): Promise<string | null> {
       deadlineMs: 8_000,
     });
     const trimmed = text.trim();
-    return trimmed.length > 20 ? trimmed : null;
+    if (trimmed.startsWith("{") || trimmed.startsWith("```") || trimmed.length < 40) return null;
+    return trimmed;
   } catch (e) {
     if (e instanceof GeminiError) return null;
     return null;
