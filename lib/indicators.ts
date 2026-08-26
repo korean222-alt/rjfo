@@ -1,14 +1,12 @@
 import type { Bar, EnrichedBar } from "@/types";
 
-/** 최근 n개(현재 봉 포함) 단순평균. 구간이 모자라면 null. */
-function sma(values: number[], i: number, n: number): number | null {
-  if (i < n - 1) return null;
+export function smaValue(values: number[], i: number, n: number): number | null {
+  if (n < 1 || i < n - 1) return null;
   let sum = 0;
   for (let k = i - n + 1; k <= i; k++) sum += values[k];
   return sum / n;
 }
 
-/** null이 하나라도 있으면 계산하지 않는 단순평균. */
 function nullableSma(values: (number | null)[], i: number, n: number): number | null {
   if (i < n - 1) return null;
   let sum = 0;
@@ -20,7 +18,6 @@ function nullableSma(values: (number | null)[], i: number, n: number): number | 
   return sum / n;
 }
 
-/** 최근 n개(현재 봉 포함) 모집단 표준편차와 평균. */
 function meanStd(
   values: number[],
   i: number,
@@ -35,7 +32,6 @@ function meanStd(
   return { mean, std: Math.sqrt(sq / n) };
 }
 
-/** 최근 n봉 구간의 선형회귀 기울기 (x = 0..n-1, 단위: 봉당 변화량). */
 function regressionSlope(values: number[], i: number, n: number): number | null {
   if (i < n - 1) return null;
   const xMean = (n - 1) / 2;
@@ -53,15 +49,10 @@ function regressionSlope(values: number[], i: number, n: number): number | null 
   return den === 0 ? null : num / den;
 }
 
-/**
- * Bar[] → 파생 지표가 붙은 EnrichedBar[].
- * 워밍업 구간(20~60봉)의 지표는 null이며, 필터에서 자동으로 제외된다.
- */
 export function enrich(bars: Bar[]): EnrichedBar[] {
   const n = bars.length;
   const volumes = bars.map((b) => b.volume);
 
-  // OBV: 상승일 +volume, 하락일 -volume 누적
   const obv: number[] = new Array(n);
   let running = 0;
   for (let i = 0; i < n; i++) {
@@ -73,7 +64,6 @@ export function enrich(bars: Bar[]): EnrichedBar[] {
     obv[i] = running;
   }
 
-  // ATR(14): Wilder 스무딩
   const tr: number[] = new Array(n);
   const atr: (number | null)[] = new Array(n).fill(null);
   for (let i = 0; i < n; i++) {
@@ -98,8 +88,8 @@ export function enrich(bars: Bar[]): EnrichedBar[] {
   }
 
   return bars.map((b, i) => {
-    const vol_ma20 = sma(volumes, i, 20);
-    const vol_ma50 = sma(volumes, i, 50);
+    const vol_ma20 = smaValue(volumes, i, 20);
+    const vol_ma50 = smaValue(volumes, i, 50);
     const atr_ma20 = nullableSma(atr, i, 20);
     const atr_ratio_20d =
       atr[i] != null && atr_ma20 != null && atr_ma20 > 0 ? atr[i]! / atr_ma20 : null;
@@ -114,11 +104,9 @@ export function enrich(bars: Bar[]): EnrichedBar[] {
         ? ((b.close - prevClose) / prevClose) * 100
         : null;
 
-    // high == low 인 봉은 0으로 나누기 → 0.5로 처리
     const span = b.high - b.low;
     const close_position_in_range = span > 0 ? (b.close - b.low) / span : 0.5;
 
-    // 최근 20봉 중 상승일 거래량 합 ÷ 하락일 거래량 합 (직전 종가가 필요하므로 i>=20)
     let up_down_vol_ratio_20d: number | null = null;
     if (i >= 20) {
       let upVol = 0;
@@ -131,7 +119,6 @@ export function enrich(bars: Bar[]): EnrichedBar[] {
       up_down_vol_ratio_20d = downVol > 0 ? upVol / downVol : null;
     }
 
-    // OBV 20봉 기울기를 vol_ma20으로 정규화 (종목·시기 간 비교 가능하게)
     const rawSlope = regressionSlope(obv, i, 20);
     const obv_slope_20d =
       rawSlope != null && vol_ma20 != null && vol_ma20 > 0
