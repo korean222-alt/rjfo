@@ -1,4 +1,5 @@
 import { smaValue } from "@/lib/indicators";
+import { MAX_MA_PERIOD, clampPeriod } from "@/lib/ma";
 import { forwardReturn, maxForwardReturn } from "@/lib/stats";
 import type { EnrichedBar } from "@/types";
 
@@ -114,25 +115,45 @@ export function scanMaBreakout(
   bars: EnrichedBar[],
   opts: { period: number; holdDays: number; direction?: "up" | "down" },
 ): { events: BreakoutEvent[]; markers: ChartMarker[]; summary: Record<string, number | null> } {
-  const period = Math.min(250, Math.max(2, Math.round(opts.period)));
-  const holdDays = Math.min(250, Math.max(1, Math.round(opts.holdDays)));
+  const period = clampPeriod(opts.period, 200);
+  const holdDays = Math.min(MAX_MA_PERIOD, Math.max(1, Math.round(opts.holdDays)));
   const direction = opts.direction ?? "up";
   const closes = bars.map((b) => b.close);
   const events: BreakoutEvent[] = [];
+  let armed = true;
 
   for (let i = 1; i < bars.length; i++) {
     const ma = smaValue(closes, i, period);
     const prevMa = smaValue(closes, i - 1, period);
     if (ma == null || prevMa == null) continue;
-    const up = bars[i - 1].close <= prevMa && bars[i].close > ma;
-    const down = bars[i - 1].close >= prevMa && bars[i].close < ma;
-    if ((direction === "up" && !up) || (direction === "down" && !down)) continue;
-    events.push({
-      date: bars[i].date,
-      close: bars[i].close,
-      ma,
-      forwardPct: forwardReturn(bars, i, holdDays),
-    });
+
+    if (direction === "up") {
+      const up = bars[i - 1].close <= prevMa && bars[i].close > ma;
+      if (armed && up) {
+        events.push({
+          date: bars[i].date,
+          close: bars[i].close,
+          ma,
+          forwardPct: forwardReturn(bars, i, holdDays),
+        });
+        armed = false;
+      } else if (!armed && bars[i].close < ma) {
+        armed = true;
+      }
+    } else {
+      const down = bars[i - 1].close >= prevMa && bars[i].close < ma;
+      if (armed && down) {
+        events.push({
+          date: bars[i].date,
+          close: bars[i].close,
+          ma,
+          forwardPct: forwardReturn(bars, i, holdDays),
+        });
+        armed = false;
+      } else if (!armed && bars[i].close > ma) {
+        armed = true;
+      }
+    }
   }
 
   const forwards = events.map((e) => e.forwardPct).filter((n): n is number => n != null);

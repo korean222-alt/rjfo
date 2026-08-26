@@ -10,6 +10,7 @@ type Props = {
   ticker: string;
   onApplied: (payload: AnalysisPayload, markers: ChartMarker[]) => void;
   onClearMarkers?: () => void;
+  onOverlayMa?: (period: number) => void;
 };
 
 const EXAMPLES = [
@@ -18,7 +19,7 @@ const EXAMPLES = [
   "차트에 표시해줘",
 ];
 
-export default function AssistantChat({ ticker, onApplied, onClearMarkers }: Props) {
+export default function AssistantChat({ ticker, onApplied, onClearMarkers, onOverlayMa }: Props) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +52,8 @@ export default function AssistantChat({ ticker, onApplied, onClearMarkers }: Pro
         markers?: ChartMarker[];
         result?: AnalysisPayload["result"];
         series?: AnalysisPayload["series"];
+        period?: number;
+        overlayPeriods?: number[];
       };
       if (!res.ok || !data.reply) throw new Error(data.error ?? "비서가 응답하지 못했습니다.");
 
@@ -58,6 +61,10 @@ export default function AssistantChat({ ticker, onApplied, onClearMarkers }: Pro
 
       if (data.action === "clear") {
         onClearMarkers?.();
+        return;
+      }
+      if (data.action === "draw_ma" && data.period) {
+        onOverlayMa?.(data.period);
         return;
       }
       if (data.action === "mark") {
@@ -70,6 +77,7 @@ export default function AssistantChat({ ticker, onApplied, onClearMarkers }: Pro
         setLastPayload(payload);
         setLastMarkers(markers);
         onApplied(payload, markers);
+        for (const p of data.overlayPeriods ?? []) onOverlayMa?.(p);
       }
     } catch (e) {
       setError((e as Error).message);

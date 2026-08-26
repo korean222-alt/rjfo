@@ -90,6 +90,12 @@ console.log("\n[4] 한국어 명령 파싱");
   }
   assert(parseAssistantIntent("표시해줘").kind === "mark", "표시");
   assert(parseAssistantIntent("표시 끄기").kind === "clear", "지우기");
+  const c = parseAssistantIntent("365일선 돌파 할때 차트에 표시해줘");
+  assert(c.kind === "ma_breakout", `365 돌파 의도 (${c.kind})`);
+  if (c.kind === "ma_breakout") assert(c.period === 365, `365 period ${c.period}`);
+  const d = parseAssistantIntent("ma 365일선 차트에 표시해줘");
+  assert(d.kind === "draw_ma", `선만 그리기 (${d.kind})`);
+  if (d.kind === "draw_ma") assert(d.period === 365, `draw 365 ${d.period}`);
 }
 
 console.log("\n[5] 펀딩 과열 필터");
@@ -118,6 +124,37 @@ console.log("\n[5] 펀딩 과열 필터");
     confidence: "high",
   });
   assert(hits.includes(80), "과열 프리셋이 80번째를 잡음");
+}
+
+console.log("\n[6] 펀딩 극단 숏은 펀딩이 음수일 때만");
+{
+  const bars: Bar[] = [];
+  for (let i = 0; i < 90; i++) {
+    const date = new Date(Date.UTC(2024, 0, 1 + i)).toISOString().slice(0, 10);
+    // 대부분 +0.0003, 마지막만 +0.00005 → z는 크게 음수지만 여전히 롱 지불
+    const funding = i === 80 ? 0.00005 : 0.0003;
+    bars.push({ date, open: 100, high: 101, low: 99, close: 100, volume: 1_000_000, funding });
+  }
+  const stillLong = enrich(bars);
+  const shortHits = applyFilter(stillLong, {
+    conditions: PRESET_CONDITIONS.funding_short,
+    logic: "AND",
+    interpretation: "펀딩 극단 숏",
+    confidence: "high",
+  });
+  assert(!shortHits.includes(80), "플러스 펀딩은 극단 숏이 아님");
+  assert((stillLong[80].funding_zscore_60d ?? 0) < -1.5, "z는 음수여도");
+  assert((stillLong[80].funding_pct ?? 0) > 0, "펀딩 자체는 플러스");
+
+  const neg: Bar[] = bars.map((b, i) => ({ ...b, funding: i === 80 ? -0.002 : 0.0001 }));
+  const shorted = enrich(neg);
+  const realShort = applyFilter(shorted, {
+    conditions: PRESET_CONDITIONS.funding_short,
+    logic: "AND",
+    interpretation: "펀딩 극단 숏",
+    confidence: "high",
+  });
+  assert(realShort.includes(80), "마이너스 펀딩 + 극단 z 는 숏 신호");
 }
 
 console.log(failures === 0 ? "\n✅ 전부 통과\n" : `\n❌ ${failures}개 실패\n`);

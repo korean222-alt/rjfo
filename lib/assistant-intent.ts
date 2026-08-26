@@ -1,4 +1,5 @@
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
+import { clampPeriod } from "@/lib/ma";
 
 export type AssistantIntent =
   | {
@@ -15,6 +16,7 @@ export type AssistantIntent =
       holdDays: number;
       direction: "up" | "down";
     }
+  | { kind: "draw_ma"; ticker?: string; period: number }
   | { kind: "mark" }
   | { kind: "clear" }
   | { kind: "chat" };
@@ -54,6 +56,14 @@ function numNear(text: string, re: RegExp, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function pickPeriod(text: string, fallback: number): number {
+  const ma = text.match(/ma\s*(\d+)/i);
+  if (ma) return clampPeriod(Number(ma[1]), fallback);
+  const day = text.match(/(\d+)\s*일/);
+  if (day) return clampPeriod(Number(day[1]), fallback);
+  return clampPeriod(fallback, fallback);
+}
+
 /** 한국어 명령을 스캐너 의도로. Gemini 없이 먼저 해석한다. */
 export function parseAssistantIntent(message: string): AssistantIntent {
   const s = message.trim();
@@ -61,9 +71,6 @@ export function parseAssistantIntent(message: string): AssistantIntent {
   const ticker = pickTicker(s);
 
   if (/표시\s*끄|지워|마커\s*삭제|신호\s*지우/.test(s)) return { kind: "clear" };
-  if (/표시해|그려줘|차트에|마커|신호\s*표시/.test(s) && !/급등|돌파|펀딩|이평/.test(s)) {
-    return { kind: "mark" };
-  }
 
   const surge = s.match(/(\d+)\s*일(?:만)?에\s*(\d+(?:\.\d+)?)\s*%\s*이상\s*(?:급등|상승)/);
   const looseSurge = /급등|급상승|대상승/.test(s) && /거래량/.test(s);
@@ -77,14 +84,25 @@ export function parseAssistantIntent(message: string): AssistantIntent {
     };
   }
 
-  if (/이평|이동평균/.test(s) && /돌파/.test(s)) {
+  if (/돌파/.test(s) && /(\d+)\s*일|ma\s*\d+/i.test(s)) {
     return {
       kind: "ma_breakout",
       ticker,
-      period: numNear(s, /(\d+)\s*일/, 200),
+      period: pickPeriod(s, 200),
       holdDays: numNear(s, /(\d+)\s*일\s*후/, 30),
       direction: /하향|아래|데드/.test(s) ? "down" : "up",
     };
+  }
+
+  if (
+    /(?:이평|이동평균|일선|\bma\b)/i.test(s) &&
+    /표시|그려|추가|넣어|올려/.test(s)
+  ) {
+    return { kind: "draw_ma", ticker, period: pickPeriod(s, 20) };
+  }
+
+  if (/표시해|그려줘|차트에|마커|신호\s*표시/.test(s) && !/급등|돌파|펀딩|이평|일선|\bma\b/i.test(s)) {
+    return { kind: "mark" };
   }
 
   return { kind: "chat" };

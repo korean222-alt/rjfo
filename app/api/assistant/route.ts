@@ -109,6 +109,16 @@ export async function POST(req: Request) {
     });
   }
 
+  if (intent.kind === "draw_ma") {
+    return json({
+      reply: `${intent.period}일선을 차트에 그렸습니다. 분석을 다시 누르지 않아도 바로 보입니다.`,
+      action: "draw_ma",
+      period: intent.period,
+      overlayPeriods: [intent.period],
+      markers: [] as ChartMarker[],
+    });
+  }
+
   const intentTicker =
     intent.kind === "surge_prelude" || intent.kind === "ma_breakout" ? intent.ticker : undefined;
   const rawTicker = intentTicker || (typeof body.ticker === "string" ? body.ticker : "");
@@ -187,5 +197,6 @@ export async function POST(req: Request) {
     markers,
     result,
     series: seriesOf(bars),
+    overlayPeriods: intent.kind === "ma_breakout" ? [intent.period] : [],
   });
 }

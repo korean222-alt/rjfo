@@ -8,6 +8,7 @@ import MatchList from "@/components/MatchList";
 import SummaryCard from "@/components/SummaryCard";
 import TickerInput from "@/components/TickerInput";
 import AssistantChat from "@/components/AssistantChat";
+import ChartMaPanel from "@/components/ChartMaPanel";
 import { runAnalyze } from "@/lib/analyze-client";
 import { compactNumber } from "@/lib/format";
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
@@ -17,9 +18,11 @@ import {
   clearAiMarkers,
   loadAiMarkers,
   loadAnalysis,
+  loadOverlayPeriods,
   loadSearchDraft,
   saveAiMarkers,
   saveAnalysis,
+  saveOverlayPeriods,
   saveSearchDraft,
   type AnalysisPayload,
 } from "@/lib/session";
@@ -42,12 +45,14 @@ export default function ResultsPage() {
   const [commandInput, setCommandInput] = useState("");
   const [editorError, setEditorError] = useState<string | null>(null);
   const [aiMarkers, setAiMarkers] = useState<ChartMarker[]>([]);
+  const [overlayPeriods, setOverlayPeriods] = useState<number[]>([]);
 
   useEffect(() => {
     const p = loadAnalysis();
     const draft = loadSearchDraft();
     setPayload(p);
     setAiMarkers(loadAiMarkers());
+    setOverlayPeriods(loadOverlayPeriods());
     if (p) {
       const matchingDraft = draft?.ticker === p.result.ticker ? draft : null;
       setCluster(p.result.clustered);
@@ -59,7 +64,20 @@ export default function ResultsPage() {
 
   const result = payload?.result ?? null;
   const matchDates = useMemo(() => (result ? result.matches.map((m) => m.date) : []), [result]);
-  const maPeriods = useMemo(() => (result ? periodsFromSpec(result.spec) : []), [result]);
+  const maPeriods = useMemo(() => {
+    const fromSpec = result ? periodsFromSpec(result.spec) : [];
+    return [...new Set([...fromSpec, ...overlayPeriods])].sort((a, b) => a - b);
+  }, [result, overlayPeriods]);
+
+  function setOverlays(next: number[]) {
+    const unique = [...new Set(next.filter((n) => n >= 2))].sort((a, b) => a - b);
+    setOverlayPeriods(unique);
+    saveOverlayPeriods(unique);
+  }
+
+  function addOverlay(period: number) {
+    setOverlays([...overlayPeriods, period]);
+  }
 
   const alertHref = useMemo(() => {
     if (!result) return null;
@@ -211,6 +229,9 @@ export default function ResultsPage() {
 
       <SummaryCard result={result} />
       <div className="my-4">
+        <ChartMaPanel periods={overlayPeriods} onChange={setOverlays} />
+      </div>
+      <div className="my-4">
         <VolumeChart series={payload.series} matchDates={matchDates} maPeriods={maPeriods} extraMarkers={aiMarkers} />
       </div>
       <div className="mb-4">
@@ -227,6 +248,7 @@ export default function ResultsPage() {
             clearAiMarkers();
             setAiMarkers([]);
           }}
+          onOverlayMa={addOverlay}
         />
       </div>
 

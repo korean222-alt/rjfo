@@ -110,7 +110,7 @@ export default function MaControls({ value, onChange }: Props) {
           type="number"
           inputMode="numeric"
           min={2}
-          max={250}
+          max={500}
           value={touch}
           onChange={(e) => applyTouch(Number(e.target.value), true)}
           className="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm tabular-nums outline-none focus:border-muted"

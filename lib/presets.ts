@@ -43,8 +43,14 @@ export const PRESET_CONDITIONS: Record<PresetName, Condition[]> = {
     { metric: "up_down_vol_ratio_20d", op: ">=", value: 1.4 },
     { metric: "obv_slope_20d", op: ">=", value: 0.15 },
   ],
-  funding_heat: [{ metric: "funding_zscore_60d", op: ">=", value: 1.5 }],
-  funding_short: [{ metric: "funding_zscore_60d", op: "<=", value: -1.5 }],
+  funding_heat: [
+    { metric: "funding_zscore_60d", op: ">=", value: 1.5 },
+    { metric: "funding_pct", op: ">", value: 0 },
+  ],
+  funding_short: [
+    { metric: "funding_zscore_60d", op: "<=", value: -1.5 },
+    { metric: "funding_pct", op: "<", value: 0 },
+  ],
   funding_flip: [{ metric: "funding_flip", op: ">=", value: 1 }],
   funding_absorption: [
     { metric: "volume_ratio_20d", op: ">=", value: 2.0 },
@@ -190,16 +196,16 @@ export const PRESET_CHIPS: PresetChip[] = [
   {
     key: "funding_heat",
     label: "펀딩 과열",
-    hint: "60일 펀딩 z-score +1.5 이상 · 롱이 몰린 날",
-    command: "펀딩 과열: 60일 펀딩 z-score가 1.5 이상인 날 찾아줘",
+    hint: "펀딩비 + (롱 지불) · 60일 z-score +1.5 이상",
+    command: "펀딩 과열: 펀딩비가 양수이고 60일 z-score가 1.5 이상인 날 찾아줘",
     conditions: PRESET_CONDITIONS.funding_heat,
     preset: "funding_heat",
   },
   {
     key: "funding_short",
     label: "펀딩 극단 숏",
-    hint: "60일 펀딩 z-score -1.5 이하 · 숏이 몰린 날",
-    command: "펀딩 극단 숏: 60일 펀딩 z-score가 -1.5 이하인 날 찾아줘",
+    hint: "펀딩비 − (숏 지불) · 60일 z-score -1.5 이하",
+    command: "펀딩 극단 숏: 펀딩비가 음수이고 60일 z-score가 -1.5 이하인 날 찾아줘",
     conditions: PRESET_CONDITIONS.funding_short,
     preset: "funding_short",
   },

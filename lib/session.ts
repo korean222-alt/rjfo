@@ -105,3 +105,25 @@ export function clearAiMarkers(): void {
     // ignore
   }
 }
+
+const OVERLAY_KEY = "volume-analyzer:overlay-ma";
+
+export function saveOverlayPeriods(periods: number[]): void {
+  try {
+    sessionStorage.setItem(OVERLAY_KEY, JSON.stringify(periods));
+  } catch {
+    // ignore
+  }
+}
+
+export function loadOverlayPeriods(): number[] {
+  try {
+    const raw = sessionStorage.getItem(OVERLAY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((n): n is number => typeof n === "number" && n >= 2 && n <= 500);
+  } catch {
+    return [];
+  }
+}

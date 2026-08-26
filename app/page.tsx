@@ -8,7 +8,7 @@ import TickerInput from "@/components/TickerInput";
 import AssistantChat from "@/components/AssistantChat";
 import { runAnalyze } from "@/lib/analyze-client";
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
-import { loadSearchDraft, saveAnalysis, saveAiMarkers, saveSearchDraft, clearAiMarkers } from "@/lib/session";
+import { loadOverlayPeriods, loadSearchDraft, saveAnalysis, saveAiMarkers, saveOverlayPeriods, saveSearchDraft, clearAiMarkers } from "@/lib/session";
 import type { FilterSpec } from "@/types";
 
 export default function Home() {
@@ -133,6 +133,10 @@ export default function Home() {
             saveAiMarkers(markers);
             saveSearchDraft({ ticker: payload.result.ticker, command: payload.result.spec.interpretation });
             router.push("/results");
+          }}
+          onOverlayMa={(period) => {
+            const cur = loadOverlayPeriods();
+            if (!cur.includes(period)) saveOverlayPeriods([...cur, period]);
           }}
         />
       </div>

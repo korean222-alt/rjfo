@@ -4,6 +4,7 @@ import { smaValue } from "@/lib/indicators";
 export const DEFAULT_SHORT_MA = 20;
 export const DEFAULT_LONG_MA = 60;
 export const DEFAULT_TOUCH_MA = 20;
+export const MAX_MA_PERIOD = 500;
 
 export type MaParams = {
   short?: number;
@@ -13,13 +14,13 @@ export type MaParams = {
 
 export function clampPeriod(n: number, fallback = DEFAULT_SHORT_MA): number {
   if (!Number.isFinite(n)) return fallback;
-  return Math.min(250, Math.max(2, Math.round(n)));
+  return Math.min(MAX_MA_PERIOD, Math.max(2, Math.round(n)));
 }
 
 export function orderedPair(short: number, long: number): { short: number; long: number } {
   let a = clampPeriod(short, DEFAULT_SHORT_MA);
   let b = clampPeriod(long, DEFAULT_LONG_MA);
-  if (a === b) b = Math.min(250, a + 1);
+  if (a === b) b = Math.min(MAX_MA_PERIOD, a + 1);
   if (a > b) [a, b] = [b, a];
   return { short: a, long: b };
 }

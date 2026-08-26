@@ -39,8 +39,8 @@ preset 정의:
   → volume_ratio_20d >= 1.3 AND close_position_in_range >= 0.7
 - "accumulation" (누적 매집): 상승일 거래량 우위 + OBV 기울기 개선
   → up_down_vol_ratio_20d >= 1.2 AND obv_slope_20d >= 0.1
-- "funding_heat" (펀딩 과열): funding_zscore_60d >= 1.5
-- "funding_short" (펀딩 극단 숏): funding_zscore_60d <= -1.5
+- "funding_heat" (펀딩 과열): funding_zscore_60d >= 1.5 AND funding_pct > 0
+- "funding_short" (펀딩 극단 숏): funding_zscore_60d <= -1.5 AND funding_pct < 0
 - "funding_flip" (펀딩 플립): funding_flip >= 1
 - "funding_absorption" (펀딩+물량 흡수): volume_ratio_20d >= 2 AND abs_close_change_pct <= 2 AND funding_z_abs >= 1`;
 
