@@ -1,25 +1,17 @@
 import { kvConfigured, kvGet, kvSet } from "@/lib/kv";
-import { findChip, type SignalKey } from "@/lib/presets";
-
-/**
- * 알림 워치리스트.
- *
- * 하나의 KV 키에 배열을 통째로 담는다. 이 앱의 워치리스트는 최대 수십 건이라
- * 인덱스를 나눌 이유가 없고, 크론이 읽고 고치는 지점도 한 곳뿐이라 이게 제일 단순하다.
- */
+import type { MaParams } from "@/lib/ma";
+import { findChip, normalizeMaParams, type SignalKey } from "@/lib/presets";
 
 const KEY = "alerts:watchlist";
-
-/** 크론 한 번에 시세 소스를 몇 번 두드릴지의 상한. Twelve Data 무료 등급이 분당 8회다. */
 export const MAX_TICKERS = 8;
 
 export type Watch = {
   id: string;
   ticker: string;
   signal: SignalKey;
-  createdAt: string; // ISO
-  /** 같은 날 신호로 두 번 알리지 않기 위한 표식 (YYYY-MM-DD) */
+  createdAt: string;
   lastNotifiedDate?: string;
+  params?: MaParams;
 };
 
 export class AlertStoreError extends Error {}
@@ -37,6 +29,19 @@ function requireKv(): void {
   }
 }
 
+function paramsKey(params?: MaParams): string {
+  if (!params) return "";
+  return JSON.stringify({
+    short: params.short ?? null,
+    long: params.long ?? null,
+    period: params.period ?? null,
+  });
+}
+
+function sameWatch(a: Watch, ticker: string, signal: SignalKey, params?: MaParams): boolean {
+  return a.ticker === ticker && a.signal === signal && paramsKey(a.params) === paramsKey(params);
+}
+
 function parse(raw: string | null): Watch[] {
   if (!raw) return [];
   try {
@@ -46,14 +51,23 @@ function parse(raw: string | null): Watch[] {
       const w = item as Partial<Watch>;
       if (typeof w.id !== "string" || typeof w.ticker !== "string") return [];
       if (typeof w.signal !== "string" || !findChip(w.signal)) return [];
+      const signal = w.signal as SignalKey;
+      const rawParams =
+        w.params && typeof w.params === "object"
+          ? {
+              short: typeof w.params.short === "number" ? w.params.short : undefined,
+              long: typeof w.params.long === "number" ? w.params.long : undefined,
+              period: typeof w.params.period === "number" ? w.params.period : undefined,
+            }
+          : undefined;
       return [
         {
           id: w.id,
           ticker: w.ticker,
-          signal: w.signal as SignalKey,
+          signal,
           createdAt: typeof w.createdAt === "string" ? w.createdAt : new Date().toISOString(),
-          lastNotifiedDate:
-            typeof w.lastNotifiedDate === "string" ? w.lastNotifiedDate : undefined,
+          lastNotifiedDate: typeof w.lastNotifiedDate === "string" ? w.lastNotifiedDate : undefined,
+          params: normalizeMaParams(signal, rawParams),
         },
       ];
     });
@@ -72,7 +86,7 @@ async function save(watches: Watch[]): Promise<void> {
   if (!ok) throw new AlertStoreError("알림 목록을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.");
 }
 
-export async function addWatch(ticker: string, signal: SignalKey): Promise<Watch[]> {
+export async function addWatch(ticker: string, signal: SignalKey, params?: MaParams): Promise<Watch[]> {
   requireKv();
   const chip = findChip(signal);
   if (!chip) throw new AlertStoreError("알 수 없는 신호입니다.");
@@ -82,8 +96,9 @@ export async function addWatch(ticker: string, signal: SignalKey): Promise<Watch
     );
   }
 
+  const normalized = normalizeMaParams(signal, params);
   const watches = await listWatches();
-  if (watches.some((w) => w.ticker === ticker && w.signal === signal)) {
+  if (watches.some((w) => sameWatch(w, ticker, signal, normalized))) {
     throw new AlertStoreError("이미 등록된 알림입니다.");
   }
 
@@ -97,10 +112,11 @@ export async function addWatch(ticker: string, signal: SignalKey): Promise<Watch
   const next: Watch[] = [
     ...watches,
     {
-      id: `${ticker}:${signal}:${Date.now().toString(36)}`,
+      id: `${ticker}:${signal}:${paramsKey(normalized) || "default"}:${Date.now().toString(36)}`,
       ticker,
       signal,
       createdAt: new Date().toISOString(),
+      params: normalized,
     },
   ];
   await save(next);
@@ -116,7 +132,6 @@ export async function removeWatch(id: string): Promise<Watch[]> {
   return next;
 }
 
-/** 크론이 알림을 보낸 뒤, 같은 날 중복 발송을 막기 위해 표식을 남긴다. */
 export async function markNotified(marks: { id: string; date: string }[]): Promise<void> {
   if (!marks.length) return;
   const byId = new Map(marks.map((m) => [m.id, m.date]));
