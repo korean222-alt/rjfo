@@ -15,7 +15,7 @@ import { DataProviderError } from "../lib/data/provider";
 import { parseStooqCsv, toStooqSymbol } from "../lib/data/stooq";
 import { fetchBarsInBrowser } from "../lib/client-quotes";
 import { BarValidationError, validateBars } from "../lib/validate-bars";
-import { parseTwelveValues } from "../lib/data/twelvedata";
+import { parseTwelveValues, readTwelveResponse } from "../lib/data/twelvedata";
 import { __resetYahooSession } from "../lib/data/yahoo";
 import type { Bar } from "../types";
 
@@ -337,6 +337,7 @@ console.log("\n[12] Twelve Data — 키가 있으면 1순위");
   assert(calls.length === 1, `첫 소스에서 끝남 (호출 ${calls.length}회)`);
   assert(!calls[0].includes("finance.yahoo"), "Yahoo를 부르지 않음");
   assert(calls[0].includes("order=ASC"), "오래된 순으로 요청");
+  assert(calls[0].includes("format=JSON"), "JSON 형식을 명시");
 }
 
 console.log("\n[13] Twelve Data — 값 파싱 / HTTP 200에 담긴 에러");
@@ -469,6 +470,114 @@ console.log("\n[18] 주식은 코인 거래소를 부르지 않는다");
   restore();
   assert(bars.length === 80, `주식은 Twelve Data ${bars.length}개`);
   assert(!calls.some((u) => u.includes("okx.com")), "주식 조회는 OKX를 안 탄다");
+}
+
+console.log("\n[19] Twelve Data 본문 오류를 구분한다");
+{
+  let err: unknown = null;
+  try {
+    await readTwelveResponse(new Response("", { status: 200 }));
+  } catch (e) {
+    err = e;
+  }
+  assert(
+    err instanceof DataProviderError && /빈 응답/.test(err.message),
+    `빈 본문: ${(err as Error).message}`,
+  );
+
+  err = null;
+  try {
+    await readTwelveResponse(new Response("<!DOCTYPE html><html>", { status: 200 }));
+  } catch (e) {
+    err = e;
+  }
+  assert(
+    err instanceof DataProviderError && /페이지/.test(err.message),
+    `HTML: ${(err as Error).message}`,
+  );
+
+  err = null;
+  try {
+    await readTwelveResponse(new Response("{not json", { status: 200 }));
+  } catch (e) {
+    err = e;
+  }
+  assert(
+    err instanceof DataProviderError && /JSON이 아닙니다/.test(err.message),
+    `잘린 JSON: ${(err as Error).message}`,
+  );
+
+  const ok = await readTwelveResponse(
+    new Response(JSON.stringify({ status: "ok", values: [] }), { status: 200 }),
+  );
+  assert(ok.status === "ok", "정상 JSON은 파싱된다");
+}
+
+console.log("\n[20] Twelve Data HTTP 200 빈 본문이면 재시도");
+{
+  reset();
+  process.env.TWELVE_DATA_API_KEY = "test-key";
+  let hits = 0;
+  install((url) => {
+    if (url.includes("api.twelvedata.com")) {
+      hits++;
+      if (hits === 1) return new Response("", { status: 200 });
+      return twelveJson(90);
+    }
+    return new Response("Too Many Requests", { status: 429 });
+  });
+  const bars = await loadBars("BE");
+  restore();
+  assert(bars.length === 90, `재시도로 ${bars.length}개 확보`);
+  assert(hits === 2, `Twelve Data ${hits}회 호출`);
+}
+
+console.log("\n[21] Twelve Data 본문 타임아웃이면 재시도");
+{
+  reset();
+  process.env.TWELVE_DATA_API_KEY = "test-key";
+  let hits = 0;
+  install((url) => {
+    if (url.includes("api.twelvedata.com")) {
+      hits++;
+      if (hits === 1) {
+        const res = new Response("partial", { status: 200 });
+        Object.defineProperty(res, "text", {
+          value: () => {
+            const e = new Error("The operation was aborted due to timeout");
+            e.name = "TimeoutError";
+            return Promise.reject(e);
+          },
+        });
+        return res;
+      }
+      return twelveJson(80);
+    }
+    return new Response("Too Many Requests", { status: 429 });
+  });
+  const bars = await loadBars("OKLO");
+  restore();
+  assert(bars.length === 80, `타임아웃 다음 재시도로 ${bars.length}개`);
+  assert(hits === 2, `Twelve Data ${hits}회 호출`);
+}
+
+console.log("\n[22] 브라우저 Yahoo가 막히면 Stooq로 폴백");
+{
+  reset();
+  install((url, init) => {
+    assert(!init?.headers, "커스텀 헤더 없이 요청 (preflight 회피)");
+    if (url.includes("finance.yahoo.com")) {
+      throw new TypeError("Failed to fetch");
+    }
+    if (url.includes("stooq.com")) {
+      return new Response(stooqCsv(200), { status: 200 });
+    }
+    return new Response("nope", { status: 500 });
+  });
+  const bars = await fetchBarsInBrowser("BE");
+  restore();
+  assert(bars.length === 200, `Stooq 브라우저 경로로 ${bars.length}개`);
+  assert(calls.some((u) => u.includes("stooq.com/q/d/l/?s=be.us")), "be.us 로 조회");
 }
 
 console.log(failures === 0 ? "\n✅ 전부 통과\n" : `\n❌ ${failures}개 실패\n`);

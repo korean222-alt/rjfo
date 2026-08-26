@@ -9,8 +9,8 @@ import { validateSpec } from "@/lib/validate-spec";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// 시세 소스 폴백(Yahoo 재시도 → Stooq)까지 감당할 여유. 기본 10초로는 모자란다.
-export const maxDuration = 30;
+// 시세 소스 폴백(Twelve 15초 + Yahoo 재시도 → Stooq)까지 감당할 여유.
+export const maxDuration = 60;
 
 export async function POST(req: Request) {
   let body: { ticker?: unknown; spec?: unknown; cluster?: unknown; bars?: unknown };

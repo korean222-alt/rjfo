@@ -5,7 +5,7 @@ import { kvConfigured } from "@/lib/kv";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 /**
  * 진단용. `/api/diag?ticker=NVDA` 를 열면 각 시세 소스가 실제로 뭘 돌려줬는지 보여준다.

@@ -1,4 +1,5 @@
 import type { Bar } from "@/types";
+import { parseStooqCsv, toStooqSymbol } from "@/lib/data/stooq";
 import { tickerFallbacks } from "@/lib/data/symbols";
 
 /**
@@ -12,14 +13,19 @@ import { tickerFallbacks } from "@/lib/data/symbols";
  *  받아온 일봉은 /api/analyze에 실어 보내고, 계산은 여전히 서버 코드가 한다.
  *  (서버는 validate-bars.ts로 형식을 전부 검증한 뒤에만 쓴다.)
  *
- * CORS 주의: 커스텀 헤더를 붙이면 preflight가 생기고 Yahoo는 그걸 허용하지 않는다.
+ * CORS 주의: 커스텀 헤더를 붙이면 preflight가 생기고 Yahoo/Stooq는 그걸 허용하지 않는다.
  * 그래서 헤더 없이 단순 GET으로만 부른다.
+ *
+ * Yahoo chart API는 오리진에 CORS 헤더를 안 주는 경우가 많다 (iOS Safari에서
+ * Failed to fetch). 그때는 같은 방식으로 Stooq CSV를 한 번 더 받아본다.
  */
 
 const HOSTS = [
   "https://query1.finance.yahoo.com",
   "https://query2.finance.yahoo.com",
 ];
+
+const STOOQ_HOSTS = ["https://stooq.com/q/d/l/", "https://stooq.pl/q/d/l/"];
 
 const YEARS = 5;
 
@@ -100,19 +106,22 @@ function toBars(json: YahooChart): Bar[] {
   return bars;
 }
 
-/**
- * 브라우저에서 Yahoo 일봉을 받아온다. 실패하면 ClientQuoteError.
- * 서버 폴백이 전부 실패했을 때만 호출한다.
- */
-export async function fetchBarsInBrowser(ticker: string): Promise<Bar[]> {
+function clipYears(bars: Bar[]): Bar[] {
+  const cutoff = new Date(Date.now() - YEARS * 366 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  const clipped = bars.filter((b) => b.date >= cutoff);
+  return clipped.length >= 60 ? clipped : bars;
+}
+
+async function fetchYahooInBrowser(ticker: string): Promise<{ bars: Bar[] | null; detail: string }> {
   const now = Math.floor(Date.now() / 1000);
   const period1 = now - Math.ceil(YEARS * 366 * 24 * 60 * 60);
   const query =
     `?period1=${period1}&period2=${now}&interval=1d` +
     `&events=div%2Csplit&includeAdjustedClose=true`;
 
-  let lastDetail = "";
-
+  let detail = "";
   for (const symbol of tickerFallbacks(ticker)) {
     for (const host of HOSTS) {
       try {
@@ -122,23 +131,62 @@ export async function fetchBarsInBrowser(ticker: string): Promise<Bar[]> {
           { signal: AbortSignal.timeout(10_000) },
         );
         if (!res.ok) {
-          lastDetail = `HTTP ${res.status}`;
+          detail = `HTTP ${res.status}`;
           continue;
         }
         const json = (await res.json()) as YahooChart;
         if (json.chart?.error) {
-          lastDetail = json.chart.error.description || json.chart.error.code || "조회 실패";
+          detail = json.chart.error.description || json.chart.error.code || "조회 실패";
           continue;
         }
         const bars = toBars(json);
-        if (bars.length >= 60) return bars;
-        lastDetail = `일봉 ${bars.length}개뿐`;
+        if (bars.length >= 60) return { bars, detail };
+        detail = `일봉 ${bars.length}개뿐`;
       } catch (e) {
         // CORS 차단도 여기로 떨어진다 (TypeError: Failed to fetch).
-        lastDetail = (e as Error).message;
+        detail = (e as Error).message;
       }
     }
   }
+  return { bars: null, detail };
+}
 
-  throw new ClientQuoteError(lastDetail || "브라우저에서도 시세를 받지 못했습니다.");
+async function fetchStooqInBrowser(ticker: string): Promise<{ bars: Bar[] | null; detail: string }> {
+  let detail = "";
+  for (const symbol of tickerFallbacks(ticker).map(toStooqSymbol)) {
+    for (const base of STOOQ_HOSTS) {
+      try {
+        const res = await fetch(`${base}?s=${encodeURIComponent(symbol)}&i=d`, {
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!res.ok) {
+          detail = `HTTP ${res.status}`;
+          continue;
+        }
+        const text = await res.text();
+        const bars = clipYears(parseStooqCsv(text));
+        if (bars.length >= 60) return { bars, detail };
+        detail = bars.length ? `일봉 ${bars.length}개뿐` : "CSV가 아님";
+      } catch (e) {
+        detail = (e as Error).message;
+      }
+    }
+  }
+  return { bars: null, detail };
+}
+
+/**
+ * 브라우저에서 일봉을 받아온다. Yahoo → Stooq 순. 실패하면 ClientQuoteError.
+ * 서버 폴백이 전부 실패했을 때만 호출한다.
+ */
+export async function fetchBarsInBrowser(ticker: string): Promise<Bar[]> {
+  const yahoo = await fetchYahooInBrowser(ticker);
+  if (yahoo.bars) return yahoo.bars;
+
+  const stooq = await fetchStooqInBrowser(ticker);
+  if (stooq.bars) return stooq.bars;
+
+  throw new ClientQuoteError(
+    yahoo.detail || stooq.detail || "브라우저에서도 시세를 받지 못했습니다.",
+  );
 }

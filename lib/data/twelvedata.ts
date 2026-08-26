@@ -14,10 +14,18 @@ import { DataProviderError, type DataProvider } from "./provider";
  *  티커 하나당 하루 두 번이면 된다.
  *
  * 키가 없으면 이 소스는 체인에서 아예 빠진다 (lib/data/index.ts).
+ *
+ * 타임아웃:
+ *  헤더가 200으로 먼저 오고 본문(5년치 일봉 JSON)이 뒤늦게 도착하는 경우가 있다.
+ *  BE 같은 종목은 성공해도 5초 근처라, 예전 8초 제한이면 본문 읽기 중에 끊겨
+ *  "응답을 읽지 못했습니다 (HTTP 200)"가 났다. 연결+본문을 15초로 본다.
+ *  재시도는 빨리 실패한 경우만 (빈 본문·잘린 JSON). 이미 15초를 쓴 타임아웃은
+ *  한 번 더 기다려도 소용없고, 그 위에 Yahoo/Stooq 예산까지 깎는다.
  */
 
 const BASE = "https://api.twelvedata.com/time_series";
-const TIMEOUT_MS = 8_000;
+const TIMEOUT_MS = 15_000;
+const RETRY_IF_FASTER_THAN_MS = 4_000;
 
 type TwelveValue = {
   datetime?: string;
@@ -67,6 +75,64 @@ export function parseTwelveValues(values: TwelveValue[]): Bar[] {
   return bars;
 }
 
+function isAbortError(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const name = (e as { name?: string }).name ?? "";
+  if (name === "AbortError" || name === "TimeoutError") return true;
+  const msg = (e as { message?: string }).message ?? "";
+  return /aborted due to timeout|the operation was aborted/i.test(msg);
+}
+
+function snippet(text: string): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+/**
+ * HTTP 200이어도 본문이 비었거나 HTML이거나 잘린 JSON일 수 있다.
+ * res.json()에 맡기면 전부 같은 문구로 떨어져 원인을 구분할 수 없다.
+ */
+export async function readTwelveResponse(res: Response): Promise<TwelveResponse> {
+  const failStatus = res.status === 429 ? 429 : 502;
+  let text: string;
+  try {
+    text = await res.text();
+  } catch (e) {
+    if (isAbortError(e)) {
+      throw new DataProviderError(
+        `시세 서버 응답을 시간 안에 받지 못했습니다 (HTTP ${res.status}).`,
+        408,
+      );
+    }
+    throw new DataProviderError(
+      `시세 서버 응답을 읽지 못했습니다 (HTTP ${res.status}).`,
+      failStatus,
+    );
+  }
+
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new DataProviderError(
+      `시세 서버가 빈 응답을 보냈습니다 (HTTP ${res.status}).`,
+      failStatus,
+    );
+  }
+  if (trimmed.startsWith("<")) {
+    throw new DataProviderError(
+      `시세 서버가 JSON 대신 페이지를 반환했습니다 (HTTP ${res.status}).`,
+      failStatus,
+    );
+  }
+
+  try {
+    return JSON.parse(trimmed) as TwelveResponse;
+  } catch {
+    throw new DataProviderError(
+      `시세 서버 응답이 JSON이 아닙니다 (HTTP ${res.status}): ${snippet(trimmed)}`,
+      failStatus,
+    );
+  }
+}
+
 export class TwelveDataProvider implements DataProvider {
   readonly name = "twelvedata";
 
@@ -79,13 +145,16 @@ export class TwelveDataProvider implements DataProvider {
     const outputsize = Math.min(5000, Math.ceil(years * 253) + 60);
     const url =
       `${BASE}?symbol=${encodeURIComponent(ticker)}` +
-      `&interval=1day&outputsize=${outputsize}&order=ASC&apikey=${encodeURIComponent(key)}`;
+      `&interval=1day&outputsize=${outputsize}&order=ASC&format=JSON` +
+      `&apikey=${encodeURIComponent(key)}`;
 
-    let res: Response | null = null;
     let json: TwelveResponse | null = null;
     let lastStatus = 0;
+    let lastError: DataProviderError | null = null;
 
     for (let attempt = 0; attempt < 2; attempt++) {
+      const started = Date.now();
+      let res: Response;
       try {
         res = await fetch(url, {
           headers: { Accept: "application/json" },
@@ -94,31 +163,41 @@ export class TwelveDataProvider implements DataProvider {
         });
         lastStatus = res.status;
       } catch (e) {
-        if (attempt === 0) continue;
-        throw new DataProviderError(
-          `시세 서버에 연결하지 못했습니다: ${(e as Error).message}`,
-          502,
+        lastError = new DataProviderError(
+          isAbortError(e)
+            ? "시세 서버 응답이 너무 느려 중단했습니다."
+            : `시세 서버에 연결하지 못했습니다: ${(e as Error).message}`,
+          isAbortError(e) ? 408 : 502,
         );
+        if (attempt === 0) continue;
+        throw lastError;
       }
 
-      if (!res) continue;
-
       try {
-        json = (await res.json()) as TwelveResponse;
+        json = await readTwelveResponse(res);
+        lastError = null;
         break;
-      } catch {
-        if (attempt === 0) continue;
-        throw new DataProviderError(
-          `시세 서버 응답을 읽지 못했습니다 (HTTP ${lastStatus}).`,
-          lastStatus === 429 ? 429 : 502,
-        );
+      } catch (e) {
+        lastError =
+          e instanceof DataProviderError
+            ? e
+            : new DataProviderError(
+                `시세 서버 응답을 읽지 못했습니다 (HTTP ${lastStatus}).`,
+                lastStatus === 429 ? 429 : 502,
+              );
+        // 타임아웃처럼 이미 오래 걸린 실패는 재시도해도 같은 예산 안에서 성공할 가망이 없다.
+        if (attempt === 0 && Date.now() - started < RETRY_IF_FASTER_THAN_MS) continue;
+        throw lastError;
       }
     }
 
     if (!json) {
-      throw new DataProviderError(
-        `시세 서버 응답을 읽지 못했습니다 (HTTP ${lastStatus}).`,
-        lastStatus === 429 ? 429 : 502,
+      throw (
+        lastError ??
+        new DataProviderError(
+          `시세 서버 응답을 읽지 못했습니다 (HTTP ${lastStatus}).`,
+          lastStatus === 429 ? 429 : 502,
+        )
       );
     }
 
