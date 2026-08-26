@@ -43,6 +43,14 @@ export const PRESET_CONDITIONS: Record<PresetName, Condition[]> = {
     { metric: "up_down_vol_ratio_20d", op: ">=", value: 1.4 },
     { metric: "obv_slope_20d", op: ">=", value: 0.15 },
   ],
+  funding_heat: [{ metric: "funding_zscore_60d", op: ">=", value: 1.5 }],
+  funding_short: [{ metric: "funding_zscore_60d", op: "<=", value: -1.5 }],
+  funding_flip: [{ metric: "funding_flip", op: ">=", value: 1 }],
+  funding_absorption: [
+    { metric: "volume_ratio_20d", op: ">=", value: 2.0 },
+    { metric: "abs_close_change_pct", op: "<=", value: 2.0 },
+    { metric: "funding_z_abs", op: ">=", value: 1.0 },
+  ],
 };
 
 export type SignalKey =
@@ -57,7 +65,11 @@ export type SignalKey =
   | "flow_improvement"
   | "golden_cross"
   | "death_cross"
-  | "ma_touch";
+  | "ma_touch"
+  | "funding_heat"
+  | "funding_short"
+  | "funding_flip"
+  | "funding_absorption";
 
 export type PresetChip = {
   key: SignalKey;
@@ -175,6 +187,39 @@ export const PRESET_CHIPS: PresetChip[] = [
     conditions: defaultTouch.conditions,
     preset: null,
   },
+  {
+    key: "funding_heat",
+    label: "펀딩 과열",
+    hint: "60일 펀딩 z-score +1.5 이상 · 롱이 몰린 날",
+    command: "펀딩 과열: 60일 펀딩 z-score가 1.5 이상인 날 찾아줘",
+    conditions: PRESET_CONDITIONS.funding_heat,
+    preset: "funding_heat",
+  },
+  {
+    key: "funding_short",
+    label: "펀딩 극단 숏",
+    hint: "60일 펀딩 z-score -1.5 이하 · 숏이 몰린 날",
+    command: "펀딩 극단 숏: 60일 펀딩 z-score가 -1.5 이하인 날 찾아줘",
+    conditions: PRESET_CONDITIONS.funding_short,
+    preset: "funding_short",
+  },
+  {
+    key: "funding_flip",
+    label: "펀딩 플립",
+    hint: "전일 대비 펀딩 부호가 바뀐 날",
+    command: "펀딩 플립: 펀딩비 부호가 바뀐 날 찾아줘",
+    conditions: PRESET_CONDITIONS.funding_flip,
+    preset: "funding_flip",
+  },
+  {
+    key: "funding_absorption",
+    label: "펀딩+물량 흡수",
+    hint: "거래량 2배 · 종가 ±2% · 펀딩 극단(|z|≥1)",
+    command:
+      "펀딩+물량 흡수: 거래량 2배 이상이고 종가 변동 ±2% 이내이며 펀딩이 극단인 날 찾아줘",
+    conditions: PRESET_CONDITIONS.funding_absorption,
+    preset: "funding_absorption",
+  },
 ];
 
 export function findChip(key: string): PresetChip | null {
@@ -185,6 +230,17 @@ export const ALERT_SIGNALS: PresetChip[] = PRESET_CHIPS.filter((c) => !c.lookahe
 
 export function isMaSignal(key: string): key is "golden_cross" | "death_cross" | "ma_touch" {
   return key === "golden_cross" || key === "death_cross" || key === "ma_touch";
+}
+
+export function isFundingSignal(
+  key: string,
+): key is "funding_heat" | "funding_short" | "funding_flip" | "funding_absorption" {
+  return (
+    key === "funding_heat" ||
+    key === "funding_short" ||
+    key === "funding_flip" ||
+    key === "funding_absorption"
+  );
 }
 
 export function normalizeMaParams(signal: SignalKey, raw?: MaParams | null): MaParams | undefined {

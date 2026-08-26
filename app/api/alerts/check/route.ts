@@ -3,6 +3,7 @@ import { checkLatest, formatAlert, type SignalHit } from "@/lib/alerts/evaluate"
 import { alertsAvailable, listWatches, markNotified, type Watch } from "@/lib/alerts/store";
 import { TelegramError, sendTelegram, telegramReady } from "@/lib/alerts/telegram";
 import { loadBars } from "@/lib/data";
+import { attachFunding } from "@/lib/data/funding";
 import { enrich } from "@/lib/indicators";
 
 export const runtime = "nodejs";
@@ -42,7 +43,7 @@ export async function GET(req: Request) {
   for (const [ticker, group] of byTicker) {
     let enriched;
     try {
-      const bars = await loadBars(ticker, { forceFresh: true });
+      const bars = await attachFunding(ticker, await loadBars(ticker, { forceFresh: true }));
       if (bars.length < 60) {
         notes.push(`${ticker}: 데이터 ${bars.length}일치뿐이라 건너뛄`);
         continue;

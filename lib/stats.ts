@@ -96,12 +96,8 @@ export function analyze(
   spec: FilterSpec,
   options: AnalyzeOptions = {},
 ): AnalysisResult {
-  const cluster = options.cluster !== false;
-  const warnings: string[] = [];
-
   let indices = applyFilter(bars, spec);
 
-  // lookahead: "급등 직전" 류 — 미래 창 안에서 목표 수익률을 달성한 날만 남긴다.
   const lookahead = spec.lookahead;
   if (lookahead && lookahead.days > 0) {
     indices = indices.filter((i) => {
@@ -109,7 +105,37 @@ export function analyze(
       return mx != null && mx >= lookahead.min_return_pct;
     });
   }
+  return finalize(ticker, bars, spec, indices, options);
+}
 
+/** AI 스캔처럼 날짜를 이미 고른 뒤, 같은 성과 비교를 돌린다. */
+export function analyzeAtDates(
+  ticker: string,
+  bars: EnrichedBar[],
+  spec: FilterSpec,
+  dates: string[],
+  options: AnalyzeOptions = {},
+): AnalysisResult {
+  const indexByDate = new Map(bars.map((b, i) => [b.date, i]));
+  const indices = dates
+    .map((d) => indexByDate.get(d))
+    .filter((i): i is number => i != null)
+    .sort((a, b) => a - b);
+  return finalize(ticker, bars, spec, indices, { ...options, cluster: false });
+}
+
+function finalize(
+  ticker: string,
+  bars: EnrichedBar[],
+  spec: FilterSpec,
+  rawIndices: number[],
+  options: AnalyzeOptions,
+): AnalysisResult {
+  const cluster = options.cluster !== false;
+  const warnings: string[] = [];
+  const lookahead = spec.lookahead;
+
+  let indices = rawIndices;
   let sizes: number[] = indices.map(() => 1);
   if (cluster) {
     const c = clusterIndices(indices);
@@ -131,6 +157,7 @@ export function analyze(
       closeChangePct: b.close_change_pct,
       closePosition: b.close_position_in_range,
       close: b.close,
+      fundingPct: b.funding_pct,
       forwardReturns,
       maxForwardReturn20d: maxForwardReturn(bars, i, HORIZON),
       clusterSize: sizes[k],
@@ -139,7 +166,6 @@ export function analyze(
 
   const stats = summarize(bars, indices);
 
-  // baseline: 같은 기간의 모든 거래일에 대해 동일한 계산
   const baselineIndices: number[] = [];
   for (let i = 0; i < bars.length; i++) {
     if (inPeriod(bars[i].date, spec.period)) baselineIndices.push(i);
@@ -150,6 +176,16 @@ export function analyze(
     warnings.push("조건에 맞는 날이 없습니다. 조건을 완화해 보세요.");
   } else if (matches.length < 10) {
     warnings.push("표본이 너무 적어 통계적 의미 없음 (매칭 10일 미만).");
+  }
+
+  const usesFunding = spec.conditions.some(
+    (c) => "metric" in c && typeof c.metric === "string" && c.metric.startsWith("funding"),
+  );
+  const fundingDays = bars.filter((b) => b.funding_pct != null).length;
+  if (usesFunding && fundingDays < 30) {
+    warnings.push("펀딩비는 코인(BTC, ETH 등)만 있습니다. 티커를 BTC로 바꿔 보세요.");
+  } else if (usesFunding && fundingDays < bars.length) {
+    warnings.push(`펀딩비는 ${fundingDays}일치만 있어 그 구간만 분석했습니다.`);
   }
 
   const withoutWindow = matches.length - stats.sampleCount;
@@ -164,7 +200,7 @@ export function analyze(
     totalBars: bars.length,
     periodStart: bars[0]?.date ?? "",
     periodEnd: bars[bars.length - 1]?.date ?? "",
-    matches: [...matches].reverse(), // 최신순
+    matches: [...matches].reverse(),
     stats: { ...stats, matchCount: matches.length },
     baseline,
     edge: {

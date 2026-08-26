@@ -18,6 +18,14 @@ export type SeriesPoint = {
   low?: number;
   close: number;
   volume: number;
+  funding?: number | null;
+};
+
+export type ChartMarker = {
+  date: string;
+  label?: string;
+  color?: string;
+  position?: "aboveBar" | "belowBar";
 };
 
 const MA_COLORS = ["#f59e0b", "#a78bfa", "#38bdf8", "#34d399"];
@@ -26,16 +34,19 @@ type Props = {
   series: SeriesPoint[];
   matchDates: string[];
   maPeriods?: number[];
+  extraMarkers?: ChartMarker[];
 };
 
-export default function VolumeChart({ series, matchDates, maPeriods = [] }: Props) {
+export default function VolumeChart({ series, matchDates, maPeriods = [], extraMarkers = [] }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const hasFunding = series.some((p) => p.funding != null && Number.isFinite(p.funding));
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !series.length) return;
 
+    const height = hasFunding ? 460 : 360;
     const chart = createChart(el, {
       layout: {
         background: { type: ColorType.Solid, color: "#141a24" },
@@ -51,7 +62,7 @@ export default function VolumeChart({ series, matchDates, maPeriods = [] }: Prop
       crosshair: { mode: 1 },
       handleScale: { axisPressedMouseMove: false },
       width: el.clientWidth,
-      height: 360,
+      height,
     });
     chartRef.current = chart;
 
@@ -84,7 +95,7 @@ export default function VolumeChart({ series, matchDates, maPeriods = [] }: Prop
       priceScaleId: "volume",
     });
     volumeSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.76, bottom: 0 },
+      scaleMargins: { top: hasFunding ? 0.7 : 0.76, bottom: hasFunding ? 0.16 : 0 },
     });
     volumeSeries.setData(
       series.map((p) => ({
@@ -93,6 +104,26 @@ export default function VolumeChart({ series, matchDates, maPeriods = [] }: Prop
         color: p.close >= (p.open ?? p.close) ? "rgba(34, 197, 94, 0.38)" : "rgba(239, 68, 68, 0.38)",
       })),
     );
+
+    if (hasFunding) {
+      const fundingSeries = chart.addHistogramSeries({
+        priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
+        priceScaleId: "funding",
+        title: "펀딩%",
+      });
+      fundingSeries.priceScale().applyOptions({
+        scaleMargins: { top: 0.86, bottom: 0 },
+      });
+      fundingSeries.setData(
+        series
+          .filter((p) => p.funding != null && Number.isFinite(p.funding))
+          .map((p) => ({
+            time: p.date as unknown as UTCTimestamp,
+            value: p.funding as number,
+            color: (p.funding as number) >= 0 ? "rgba(251, 146, 60, 0.85)" : "rgba(34, 211, 238, 0.85)",
+          })),
+      );
+    }
 
     const uniquePeriods = [...new Set(maPeriods.filter((n) => Number.isFinite(n) && n >= 2))];
     for (let i = 0; i < uniquePeriods.length; i++) {
@@ -110,16 +141,25 @@ export default function VolumeChart({ series, matchDates, maPeriods = [] }: Prop
       seriesApi.setData(line.map((p) => ({ time: p.date as unknown as UTCTimestamp, value: p.value })));
     }
 
-    const matched = new Set(matchDates);
+    const byDate = new Map<string, ChartMarker>();
+    for (const d of matchDates) {
+      byDate.set(d, { date: d, label: "신호", color: "#60a5fa", position: "belowBar" });
+    }
+    for (const m of extraMarkers) {
+      byDate.set(m.date, m);
+    }
     const markers: SeriesMarker<UTCTimestamp>[] = series
-      .filter((p) => matched.has(p.date))
-      .map((p) => ({
-        time: p.date as unknown as UTCTimestamp,
-        position: "belowBar" as const,
-        color: "#60a5fa",
-        shape: "arrowUp" as const,
-        text: "신호",
-      }));
+      .filter((p) => byDate.has(p.date))
+      .map((p) => {
+        const m = byDate.get(p.date)!;
+        return {
+          time: p.date as unknown as UTCTimestamp,
+          position: (m.position ?? "belowBar") as "aboveBar" | "belowBar",
+          color: m.color ?? "#60a5fa",
+          shape: "arrowUp" as const,
+          text: m.label ?? "신호",
+        };
+      });
     markers.sort((a, b) => String(a.time).localeCompare(String(b.time)));
     candleSeries.setMarkers(markers);
 
@@ -133,16 +173,17 @@ export default function VolumeChart({ series, matchDates, maPeriods = [] }: Prop
       chart.remove();
       chartRef.current = null;
     };
-  }, [series, matchDates, maPeriods]);
+  }, [series, matchDates, maPeriods, extraMarkers, hasFunding]);
 
   return (
     <section className="rounded-2xl border border-border bg-surface p-3">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold">캔들 차트 · 거래량</h2>
+          <h2 className="text-sm font-semibold">{hasFunding ? "캔들 · 거래량 · 펀딩비" : "캔들 차트 · 거래량"}</h2>
           <p className="mt-1 text-xs text-muted leading-relaxed">
-            파란 화살표는 현재 조건에 매칭된 신호 날짜입니다.
-            {maPeriods.length ? ` 노란/보라 선은 설정한 이평선(${maPeriods.join(", ")}일)입니다.` : ""}
+            화살표는 조건에 걸린 날입니다.
+            {hasFunding ? " 맨 아래 주황/청록 막대가 일평균 펀딩비(%)입니다." : ""}
+            {maPeriods.length ? ` 선은 이평선(${maPeriods.join(", ")}일)입니다.` : ""}
           </p>
         </div>
         <a

@@ -7,22 +7,28 @@ import CommandInput from "@/components/CommandInput";
 import MatchList from "@/components/MatchList";
 import SummaryCard from "@/components/SummaryCard";
 import TickerInput from "@/components/TickerInput";
+import AssistantChat from "@/components/AssistantChat";
 import { runAnalyze } from "@/lib/analyze-client";
 import { compactNumber } from "@/lib/format";
-import { isCryptoTicker, isValidTicker, normalizeTicker } from "@/lib/data/provider";
-import { tradingViewPerpSymbol } from "@/lib/data/crypto";
+import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import { periodsFromSpec } from "@/lib/ma";
 import { ALERT_SIGNALS, isMaSignal } from "@/lib/presets";
-import { loadAnalysis, loadSearchDraft, saveAnalysis, saveSearchDraft, type AnalysisPayload } from "@/lib/session";
+import {
+  clearAiMarkers,
+  loadAiMarkers,
+  loadAnalysis,
+  loadSearchDraft,
+  saveAiMarkers,
+  saveAnalysis,
+  saveSearchDraft,
+  type AnalysisPayload,
+} from "@/lib/session";
+import type { ChartMarker } from "@/components/VolumeChart";
 import type { FilterSpec } from "@/types";
 
 const VolumeChart = dynamic(() => import("@/components/VolumeChart"), {
   ssr: false,
   loading: () => <div className="h-[276px] rounded-2xl border border-border bg-surface" />,
-});
-const TradingViewFunding = dynamic(() => import("@/components/TradingViewFunding"), {
-  ssr: false,
-  loading: () => <div className="h-[420px] rounded-2xl border border-border bg-surface" />,
 });
 
 export default function ResultsPage() {
@@ -35,11 +41,13 @@ export default function ResultsPage() {
   const [tickerInput, setTickerInput] = useState("");
   const [commandInput, setCommandInput] = useState("");
   const [editorError, setEditorError] = useState<string | null>(null);
+  const [aiMarkers, setAiMarkers] = useState<ChartMarker[]>([]);
 
   useEffect(() => {
     const p = loadAnalysis();
     const draft = loadSearchDraft();
     setPayload(p);
+    setAiMarkers(loadAiMarkers());
     if (p) {
       const matchingDraft = draft?.ticker === p.result.ticker ? draft : null;
       setCluster(p.result.clustered);
@@ -107,6 +115,8 @@ export default function ResultsPage() {
       if (!parseRes.ok || !parsed.spec) throw new Error(parsed.error ?? "명령을 이해하지 못했어요.");
       const data = await runAnalyze(ticker, parsed.spec);
       saveAnalysis(data);
+      clearAiMarkers();
+      setAiMarkers([]);
       setPayload(data);
       setCluster(data.result.clustered);
       setTickerInput(ticker);
@@ -201,13 +211,24 @@ export default function ResultsPage() {
 
       <SummaryCard result={result} />
       <div className="my-4">
-        <VolumeChart series={payload.series} matchDates={matchDates} maPeriods={maPeriods} />
+        <VolumeChart series={payload.series} matchDates={matchDates} maPeriods={maPeriods} extraMarkers={aiMarkers} />
       </div>
-      {isCryptoTicker(result.ticker) && tradingViewPerpSymbol(result.ticker) ? (
-        <div className="mb-4">
-          <TradingViewFunding symbol={tradingViewPerpSymbol(result.ticker)!} />
-        </div>
-      ) : null}
+      <div className="mb-4">
+        <AssistantChat
+          ticker={result.ticker}
+          onApplied={(next, markers) => {
+            saveAnalysis(next);
+            saveAiMarkers(markers);
+            setPayload(next);
+            setAiMarkers(markers);
+            setCluster(next.result.clustered);
+          }}
+          onClearMarkers={() => {
+            clearAiMarkers();
+            setAiMarkers([]);
+          }}
+        />
+      </div>
 
       <div className="mb-3 flex items-center justify-between rounded-xl border border-border bg-surface px-4 py-3">
         <div>

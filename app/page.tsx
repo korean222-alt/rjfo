@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import CommandInput from "@/components/CommandInput";
 import TickerInput from "@/components/TickerInput";
+import AssistantChat from "@/components/AssistantChat";
 import { runAnalyze } from "@/lib/analyze-client";
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
-import { loadSearchDraft, saveAnalysis, saveSearchDraft } from "@/lib/session";
+import { loadSearchDraft, saveAnalysis, saveAiMarkers, saveSearchDraft, clearAiMarkers } from "@/lib/session";
 import type { FilterSpec } from "@/types";
 
 export default function Home() {
@@ -58,6 +59,7 @@ export default function Home() {
       });
 
       saveAnalysis(payload);
+      clearAiMarkers();
       router.push("/results");
     } catch (e) {
       setError((e as Error).message);
@@ -121,6 +123,18 @@ export default function Home() {
                 ? "시세 직접 받아오는 중…"
                 : "분석하기"}
         </button>
+      </div>
+
+      <div className="mt-8">
+        <AssistantChat
+          ticker={ticker}
+          onApplied={(payload, markers) => {
+            saveAnalysis(payload);
+            saveAiMarkers(markers);
+            saveSearchDraft({ ticker: payload.result.ticker, command: payload.result.spec.interpretation });
+            router.push("/results");
+          }}
+        />
       </div>
 
       <p className="mt-8 text-center text-xs text-muted">

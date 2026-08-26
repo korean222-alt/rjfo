@@ -1,5 +1,5 @@
 import type { AnalysisResult } from "@/types";
-import type { SeriesPoint } from "@/components/VolumeChart";
+import type { ChartMarker, SeriesPoint } from "@/components/VolumeChart";
 
 export type AnalysisPayload = {
   result: AnalysisResult;
@@ -74,5 +74,34 @@ export function loadClientBars(ticker: string): unknown | null {
     return saved.ticker === ticker && saved.bars ? saved.bars : null;
   } catch {
     return null;
+  }
+}
+
+const MARKERS_KEY = "volume-analyzer:ai-markers";
+
+export function saveAiMarkers(markers: ChartMarker[]): void {
+  try {
+    sessionStorage.setItem(MARKERS_KEY, JSON.stringify(markers));
+  } catch {
+    // ignore
+  }
+}
+
+export function loadAiMarkers(): ChartMarker[] {
+  try {
+    const raw = sessionStorage.getItem(MARKERS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as ChartMarker[];
+    return Array.isArray(parsed) ? parsed.filter((m) => m && typeof m.date === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function clearAiMarkers(): void {
+  try {
+    sessionStorage.removeItem(MARKERS_KEY);
+  } catch {
+    // ignore
   }
 }

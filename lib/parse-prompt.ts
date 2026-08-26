@@ -26,6 +26,11 @@ export const PARSER_SYSTEM_PROMPT = `너는 주식 거래량 분석 명령을 JS
 - up_down_vol_ratio_20d: 20일 상승일 거래량합 ÷ 하락일 거래량합
 - obv_slope_20d: OBV 20일 기울기 (정규화됨)
 - atr_ratio_20d: 현재 ATR(14) ÷ 20일 평균 ATR(14) (1보다 작으면 평소보다 변동폭이 줄어든 상태)
+- funding_pct: 일평균 펀딩비 (%). 0.01 = 0.01%. 코인만 있음
+- funding_zscore_60d: 60일 펀딩 z-score. 양수=롱 과열, 음수=숏 과열
+- funding_z_abs: 펀딩 z-score 절대값
+- funding_abs: 펀딩비 절대값 (%)
+- funding_flip: 전일 대비 펀딩 부호가 바뀌면 1, 아니면 0
 
 preset 정의:
 - "absorption" (물량 흡수): 거래량은 늘었는데 주가는 거의 안 움직임
@@ -33,7 +38,11 @@ preset 정의:
 - "high_close" (고가 마감): 거래량 증가 + 고가 쪽 마감
   → volume_ratio_20d >= 1.3 AND close_position_in_range >= 0.7
 - "accumulation" (누적 매집): 상승일 거래량 우위 + OBV 기울기 개선
-  → up_down_vol_ratio_20d >= 1.2 AND obv_slope_20d >= 0.1`;
+  → up_down_vol_ratio_20d >= 1.2 AND obv_slope_20d >= 0.1
+- "funding_heat" (펀딩 과열): funding_zscore_60d >= 1.5
+- "funding_short" (펀딩 극단 숏): funding_zscore_60d <= -1.5
+- "funding_flip" (펀딩 플립): funding_flip >= 1
+- "funding_absorption" (펀딩+물량 흡수): volume_ratio_20d >= 2 AND abs_close_change_pct <= 2 AND funding_z_abs >= 1`;
 
 /** Few-shot 예시 — 첫 user/assistant 턴으로 넣는다. */
 export const FEW_SHOT: { input: string; output: string }[] = [
@@ -66,5 +75,15 @@ export const FEW_SHOT: { input: string; output: string }[] = [
     input: "오르는 날에 거래량이 몰리고 있는 날 찾아줘",
     output:
       '{"conditions":[{"metric":"up_down_vol_ratio_20d","op":">=","value":1.2},{"metric":"obv_slope_20d","op":">=","value":0.1}],"logic":"AND","preset":"accumulation","interpretation":"최근 20일 동안 오른 날의 거래량이 내린 날보다 많고, 누적 거래량 흐름도 위를 향하는 날","confidence":"low"}',
+  },
+  {
+    input: "비트코인 펀딩 과열인 날 찾아줘",
+    output:
+      '{"conditions":[{"metric":"funding_zscore_60d","op":">=","value":1.5}],"logic":"AND","preset":"funding_heat","interpretation":"펀딩비가 최근 60일 기준으로 과열(롱이 몰린) 상태인 날","confidence":"high"}',
+  },
+  {
+    input: "펀딩이 바뀌고 거래량은 터졌는데 가격은 안 움직인 날",
+    output:
+      '{"conditions":[{"metric":"volume_ratio_20d","op":">=","value":2.0},{"metric":"abs_close_change_pct","op":"<=","value":2.0},{"metric":"funding_z_abs","op":">=","value":1.0}],"logic":"AND","preset":"funding_absorption","interpretation":"거래량은 평소의 2배인데 가격은 거의 안 움직이고 펀딩이 극단인 날","confidence":"high"}',
   },
 ];

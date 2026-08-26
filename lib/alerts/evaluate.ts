@@ -39,9 +39,12 @@ export function formatAlert(ticker: string, hits: SignalHit[]): string {
     "",
     `${bar.date} 종가 ${bar.close.toFixed(2)} (${signed(bar.close_change_pct)})`,
     `거래량 ${compactNumber(bar.volume)}${ratio != null ? ` (평소의 ${ratio.toFixed(1)}배)` : ""}`,
+    bar.funding_pct != null
+      ? `펀딩비 ${bar.funding_pct.toFixed(4)}%${bar.funding_zscore_60d != null ? ` (z ${bar.funding_zscore_60d.toFixed(1)})` : ""}`
+      : "",
     `종가 위치 ${(bar.close_position_in_range * 100).toFixed(0)}% (0%=저가, 100%=고가)`,
     "",
     "과거 패턴이며 투자 판단의 근거가 아닙니다.",
-  ];
+  ].filter(Boolean);
   return lines.join("\n");
 }

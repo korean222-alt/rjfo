@@ -29,6 +29,16 @@ function metricValue(bar: EnrichedBar, metric: Metric): number | null {
       return bar.obv_slope_20d;
     case "atr_ratio_20d":
       return bar.atr_ratio_20d;
+    case "funding_pct":
+      return bar.funding_pct;
+    case "funding_zscore_60d":
+      return bar.funding_zscore_60d;
+    case "funding_z_abs":
+      return bar.funding_z_abs;
+    case "funding_abs":
+      return bar.funding_abs;
+    case "funding_flip":
+      return bar.funding_flip;
   }
 }
 

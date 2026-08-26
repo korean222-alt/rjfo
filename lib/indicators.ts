@@ -125,6 +125,36 @@ export function enrich(bars: Bar[]): EnrichedBar[] {
         ? rawSlope / vol_ma20
         : null;
 
+    const funding_pct = b.funding != null && Number.isFinite(b.funding) ? b.funding * 100 : null;
+    let funding_zscore_60d: number | null = null;
+    if (i >= 59) {
+      const window: number[] = [];
+      let ok = true;
+      for (let k = i - 59; k <= i; k++) {
+        const f = bars[k].funding;
+        if (f == null || !Number.isFinite(f)) {
+          ok = false;
+          break;
+        }
+        window.push(f * 100);
+      }
+      if (ok) {
+        const z = meanStd(window, window.length - 1, 60);
+        if (z && z.std > 0) funding_zscore_60d = (window[window.length - 1] - z.mean) / z.std;
+      }
+    }
+    const prevFunding = i > 0 ? bars[i - 1].funding : null;
+    const funding_flip =
+      b.funding != null &&
+      prevFunding != null &&
+      Math.abs(b.funding) > 1e-8 &&
+      Math.abs(prevFunding) > 1e-8 &&
+      Math.sign(b.funding) !== Math.sign(prevFunding)
+        ? 1
+        : b.funding != null
+          ? 0
+          : null;
+
     return {
       ...b,
       vol_ma20,
@@ -141,6 +171,11 @@ export function enrich(bars: Bar[]): EnrichedBar[] {
       obv_slope_20d,
       atr14: atr[i],
       atr_ratio_20d,
+      funding_pct,
+      funding_zscore_60d,
+      funding_z_abs: funding_zscore_60d == null ? null : Math.abs(funding_zscore_60d),
+      funding_abs: funding_pct == null ? null : Math.abs(funding_pct),
+      funding_flip,
     };
   });
 }

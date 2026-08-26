@@ -1,5 +1,6 @@
 import { json } from "@/lib/json-response";
 import { loadBars } from "@/lib/data";
+import { attachFunding } from "@/lib/data/funding";
 import { DataProviderError, isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import { enrich } from "@/lib/indicators";
 import { BarValidationError, validateBars } from "@/lib/validate-bars";
@@ -47,7 +48,8 @@ export async function POST(req: Request) {
   }
 
   try {
-    const bars = clientBars ?? (await loadBars(ticker));
+    const raw = clientBars ?? (await loadBars(ticker));
+    const bars = await attachFunding(ticker, raw);
     if (bars.length < 60) {
       return json(
         { error: `'${ticker}'의 데이터가 ${bars.length}일치뿐이라 분석할 수 없습니다.` },
@@ -65,6 +67,7 @@ export async function POST(req: Request) {
       low: Number(b.low.toFixed(4)),
       close: Number(b.close.toFixed(4)),
       volume: b.volume,
+      funding: b.funding_pct,
     }));
 
     return json({ result, series });

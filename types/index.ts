@@ -6,6 +6,8 @@ export type Bar = {
   low: number;
   close: number;
   volume: number;
+  /** 일평균 펀딩비(소수). 0.0001 = 0.01%. 코인만 있음. */
+  funding?: number | null;
 };
 
 export type EnrichedBar = Bar & {
@@ -23,6 +25,11 @@ export type EnrichedBar = Bar & {
   obv_slope_20d: number | null;
   atr14: number | null;
   atr_ratio_20d: number | null;
+  funding_pct: number | null;
+  funding_zscore_60d: number | null;
+  funding_z_abs: number | null;
+  funding_abs: number | null;
+  funding_flip: number | null;
 };
 
 export const METRICS = [
@@ -37,6 +44,11 @@ export const METRICS = [
   "up_down_vol_ratio_20d",
   "obv_slope_20d",
   "atr_ratio_20d",
+  "funding_pct",
+  "funding_zscore_60d",
+  "funding_z_abs",
+  "funding_abs",
+  "funding_flip",
 ] as const;
 
 export type Metric = (typeof METRICS)[number];
@@ -72,7 +84,11 @@ export type PresetName =
   | "squeeze"
   | "volume_expansion"
   | "strong_breakout"
-  | "flow_improvement";
+  | "flow_improvement"
+  | "funding_heat"
+  | "funding_short"
+  | "funding_flip"
+  | "funding_absorption";
 
 export type FilterSpec = {
   conditions: Condition[];
@@ -100,6 +116,7 @@ export type MatchRow = {
   closeChangePct: number | null;
   closePosition: number;
   close: number;
+  fundingPct: number | null;
   forwardReturns: ForwardReturns;
   maxForwardReturn20d: number | null;
   clusterSize?: number;

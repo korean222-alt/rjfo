@@ -36,6 +36,9 @@ export default function MatchList({ matches }: { matches: MatchRow[] }) {
               value={pct(m.closeChangePct)}
               className={returnColor(m.closeChangePct)}
             />
+            {m.fundingPct != null ? (
+              <Cell label="펀딩비" value={`${m.fundingPct >= 0 ? "+" : ""}${m.fundingPct.toFixed(4)}%`} />
+            ) : null}
           </div>
 
           <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
