@@ -48,6 +48,14 @@ const TICKER_ALIASES: Record<string, string> = {
   ADAUSD: "ADA-USD",
   "에이다": "ADA-USD",
   "카르다노": "ADA-USD",
+  "삼성전자": "005930.KS",
+  "삼성": "005930.KS",
+  "SK하이닉스": "000660.KS",
+  "하이닉스": "000660.KS",
+  "카카오": "035720.KS",
+  "네이버": "035420.KS",
+  "현대차": "005380.KS",
+  "기아": "000270.KS",
 };
 
 export function normalizeTicker(raw: string): string {
@@ -55,7 +63,10 @@ export function normalizeTicker(raw: string): string {
   if (!trimmed) return "";
   const alias = TICKER_ALIASES[trimmed] ?? TICKER_ALIASES[trimmed.toUpperCase()];
   if (alias) return alias;
-  return trimmed.toUpperCase();
+  const upper = trimmed.toUpperCase();
+  // 한국 종목 6자리는 Yahoo/Stooq가 거래소 접미사를 요구한다 (005930 → 005930.KS).
+  if (/^\d{6}$/.test(upper)) return `${upper}.KS`;
+  return upper;
 }
 
 export function isValidTicker(ticker: string): boolean {

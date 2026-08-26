@@ -75,7 +75,14 @@ export type MaTouchCondition = {
   period: number;
 };
 
-export type Condition = MetricCondition | MaCrossCondition | MaTouchCondition;
+export type MaBreakoutCondition = {
+  kind: "ma_breakout";
+  period: number;
+  direction: "up" | "down";
+};
+
+export type Condition = MetricCondition | MaCrossCondition | MaTouchCondition | MaBreakoutCondition;
+
 
 export type PresetName =
   | "absorption"

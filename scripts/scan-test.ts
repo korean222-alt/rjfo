@@ -6,6 +6,7 @@ import { toDailyFunding } from "../lib/data/funding";
 import { enrich } from "../lib/indicators";
 import { parseAssistantIntent } from "../lib/assistant-intent";
 import { isCryptoTicker, normalizeTicker } from "../lib/data/provider";
+import { parseMaCommand } from "../lib/ma";
 import { parseLocalCommand } from "../lib/parse-local";
 import { scanMaBreakout, scanSurgePrelude } from "../lib/scan";
 import { applyFilter } from "../lib/filter";
@@ -180,6 +181,29 @@ console.log("\n[7] 로컬 명령 파싱 (Gemini 없이)");
   assert(none === null, "애매한 문장은 Gemini로 넘긴다");
   assert(normalizeTicker("SOL") === "SOL-USD" && isCryptoTicker("SOL-USD"), "SOL 별칭");
   assert(normalizeTicker("도지") === "DOGE-USD", "도지 별칭");
+  assert(normalizeTicker("005930") === "005930.KS", "한국 6자리 → .KS");
+  assert(normalizeTicker("삼성전자") === "005930.KS", "삼성전자 별칭");
+  assert(normalizeTicker("005930.KQ") === "005930.KQ", "이미 붙은 KOSDAQ 접미사는 유지");
+}
+
+console.log("\n[8] 이평선 돌파 명령은 Gemini 없이");
+{
+  const a = parseMaCommand("365일 이평선 돌파");
+  const c0 = a?.conditions[0];
+  assert(a != null && c0?.kind === "ma_breakout", "365일 이평선 돌파");
+  if (c0?.kind === "ma_breakout") {
+    assert(c0.period === 365 && c0.direction === "up", `365 상향 ${c0.period}/${c0.direction}`);
+  }
+  const b = parseMaCommand("365일선 돌파");
+  assert(b?.conditions[0]?.kind === "ma_breakout", "365일선 돌파");
+  const c = parseMaCommand("200일 이동평균선 하향 돌파");
+  const cc = c?.conditions[0];
+  assert(cc?.kind === "ma_breakout" && cc.direction === "down" && cc.period === 200, "하향 돌파");
+  const d = parseMaCommand("이평선 돌파");
+  const dd = d?.conditions[0];
+  assert(dd?.kind === "ma_breakout" && dd.period === 200, "이평선만 있으면 200일");
+  assert(parseMaCommand("강한 돌파") === null, "거래량 강한 돌파는 이평 파서가 안 먹음");
+  assert(parseMaCommand("200일선 터치")?.conditions[0]?.kind === "ma_touch", "터치는 그대로");
 }
 
 console.log(failures === 0 ? "\n✅ 전부 통과\n" : `\n❌ ${failures}개 실패\n`);

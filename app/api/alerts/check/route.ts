@@ -62,7 +62,7 @@ export async function GET(req: Request) {
         alreadySent++;
         continue;
       }
-      const hit = checkLatest(enriched, w.signal, w.params);
+      const hit = checkLatest(enriched, w.signal, w.params, ticker);
       if (hit) fired.push({ watchId: w.id, hit });
     }
 

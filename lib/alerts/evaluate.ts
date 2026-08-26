@@ -1,6 +1,7 @@
 import { applyFilter } from "@/lib/filter";
 import { compactNumber } from "@/lib/format";
 import { specForSignal, type SignalKey } from "@/lib/presets";
+import { isCryptoTicker } from "@/lib/data/provider";
 import type { MaParams } from "@/lib/ma";
 import type { EnrichedBar } from "@/types";
 
@@ -18,13 +19,17 @@ export function checkLatest(
   bars: EnrichedBar[],
   signal: SignalKey,
   params?: MaParams | null,
+  ticker?: string,
 ): SignalHit | null {
   const spec = specForSignal(signal, params);
   if (!spec) return null;
   if (!bars.length) return null;
 
   let last = bars.length - 1;
-  if (bars[last].date === utcToday() && last > 0) last -= 1;
+  // 코인만 오늘 UTC 봉이 아직 진행 중이다. 미국/한국 주식은 장 마감 크론
+  // 시점(22:00 UTC)에 오늘 봉이 이미 완성되어 있으므로 건너뛰면 하루 늦는다.
+  const skipIncomplete = !ticker || isCryptoTicker(ticker);
+  if (skipIncomplete && bars[last].date === utcToday() && last > 0) last -= 1;
   const matched = applyFilter(bars, spec).includes(last);
   return matched ? { signal, label: spec.interpretation, bar: bars[last] } : null;
 }

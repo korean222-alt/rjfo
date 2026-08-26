@@ -1,5 +1,5 @@
 import { METRICS, OPS, type Condition, type FilterSpec, type Metric, type Op } from "@/types";
-import { clampPeriod, orderedPair } from "@/lib/ma";
+import { clampPeriod, orderedPair, DEFAULT_BREAKOUT_MA } from "@/lib/ma";
 import { PRESET_CONDITIONS } from "./presets";
 
 export class SpecValidationError extends Error {}
@@ -23,6 +23,15 @@ function parseCondition(c: unknown): Condition[] {
   }
   if (cc.kind === "ma_touch") {
     return [{ kind: "ma_touch", period: clampPeriod(Number(cc.period)) }];
+  }
+  if (cc.kind === "ma_breakout") {
+    return [
+      {
+        kind: "ma_breakout",
+        period: clampPeriod(Number(cc.period), DEFAULT_BREAKOUT_MA),
+        direction: cc.direction === "down" ? "down" : "up",
+      },
+    ];
   }
 
   const value = typeof cc.value === "number" ? cc.value : Number(cc.value);

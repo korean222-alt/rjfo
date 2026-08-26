@@ -1,4 +1,5 @@
 import type { Bar } from "@/types";
+import { tickerFallbacks } from "@/lib/data/symbols";
 
 /**
  * 브라우저에서 직접 시세를 받아오는 폴백 경로.
@@ -112,28 +113,30 @@ export async function fetchBarsInBrowser(ticker: string): Promise<Bar[]> {
 
   let lastDetail = "";
 
-  for (const host of HOSTS) {
-    try {
-      // 헤더를 붙이지 않아야 CORS preflight가 생기지 않는다.
-      const res = await fetch(
-        `${host}/v8/finance/chart/${encodeURIComponent(ticker)}${query}`,
-        { signal: AbortSignal.timeout(10_000) },
-      );
-      if (!res.ok) {
-        lastDetail = `HTTP ${res.status}`;
-        continue;
+  for (const symbol of tickerFallbacks(ticker)) {
+    for (const host of HOSTS) {
+      try {
+        // 헤더를 붙이지 않아야 CORS preflight가 생기지 않는다.
+        const res = await fetch(
+          `${host}/v8/finance/chart/${encodeURIComponent(symbol)}${query}`,
+          { signal: AbortSignal.timeout(10_000) },
+        );
+        if (!res.ok) {
+          lastDetail = `HTTP ${res.status}`;
+          continue;
+        }
+        const json = (await res.json()) as YahooChart;
+        if (json.chart?.error) {
+          lastDetail = json.chart.error.description || json.chart.error.code || "조회 실패";
+          continue;
+        }
+        const bars = toBars(json);
+        if (bars.length >= 60) return bars;
+        lastDetail = `일봉 ${bars.length}개뿐`;
+      } catch (e) {
+        // CORS 차단도 여기로 떨어진다 (TypeError: Failed to fetch).
+        lastDetail = (e as Error).message;
       }
-      const json = (await res.json()) as YahooChart;
-      if (json.chart?.error) {
-        lastDetail = json.chart.error.description || json.chart.error.code || "조회 실패";
-        continue;
-      }
-      const bars = toBars(json);
-      if (bars.length >= 60) return bars;
-      lastDetail = `일봉 ${bars.length}개뿐`;
-    } catch (e) {
-      // CORS 차단도 여기로 떨어진다 (TypeError: Failed to fetch).
-      lastDetail = (e as Error).message;
     }
   }
 

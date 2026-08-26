@@ -4,7 +4,7 @@ import { CryptoExchangeProvider, hasUsableVolume } from "./crypto";
 import { FixtureProvider } from "./fixture";
 import { DataProviderError, isCryptoTicker, type DataProvider } from "./provider";
 import { StooqProvider } from "./stooq";
-import { toStooqCryptoSymbol, toTwelveSymbol } from "./symbols";
+import { toStooqCryptoSymbol, toTwelveSymbol, tickerFallbacks } from "./symbols";
 import { TwelveDataProvider, twelveDataKey } from "./twelvedata";
 import { YahooProvider } from "./yahoo";
 
@@ -88,7 +88,8 @@ function tickerNotFound(attempts: Attempt[]): Attempt | null {
   return null;
 }
 
-async function fetchFromChain(ticker: string): Promise<Bar[]> {
+async function fetchFromChain(ticker: string, tried: Set<string> = new Set()): Promise<Bar[]> {
+  tried.add(ticker);
   const providers = getProviders(ticker);
   const attempts: Attempt[] = [];
 
@@ -109,6 +110,16 @@ async function fetchFromChain(ticker: string): Promise<Bar[]> {
         message: (e as Error)?.message ?? "알 수 없는 오류",
       });
       // 소스 하나가 막힌 것뿐이면 다음 소스로 계속 간다.
+    }
+  }
+
+  const sibling = tickerFallbacks(ticker).find((t) => !tried.has(t));
+  const notFoundEarly = tickerNotFound(attempts);
+  if (notFoundEarly && sibling) {
+    try {
+      return await fetchFromChain(sibling, tried);
+    } catch (e) {
+      if (!(e instanceof DataProviderError && e.status === 404)) throw e;
     }
   }
 

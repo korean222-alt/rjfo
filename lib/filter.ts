@@ -2,7 +2,7 @@ import { testMaCondition } from "@/lib/ma";
 import type { Condition, EnrichedBar, FilterSpec, Metric, MetricCondition } from "@/types";
 
 function isMetricCondition(c: Condition): c is MetricCondition {
-  return c.kind !== "ma_cross" && c.kind !== "ma_touch";
+  return !c.kind || c.kind === "metric";
 }
 
 function metricValue(bar: EnrichedBar, metric: Metric): number | null {

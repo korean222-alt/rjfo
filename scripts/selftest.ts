@@ -10,6 +10,7 @@ import { enrich } from "../lib/indicators";
 import { applyFilter, clusterIndices } from "../lib/filter";
 import { analyze, forwardReturn, maxForwardReturn } from "../lib/stats";
 import { checkLatest, formatAlert } from "../lib/alerts/evaluate";
+import { parseMaCommand } from "../lib/ma";
 import { PRESET_CHIPS, PRESET_CONDITIONS } from "../lib/presets";
 import type { Bar, FilterSpec, PresetName } from "../types";
 
@@ -224,6 +225,18 @@ console.log("\n[6] AND / OR 로직");
     conditions: [{ metric: "atr_ratio_20d", op: ">=", value: 0 }],
   });
   assert(atrReady.length === bars.length - 33, "ATR 비율 조건은 워밍업 이후 봉만 통과");
+
+  const crossBars: Bar[] = [];
+  for (let i = 0; i < 80; i++) {
+    const date = new Date(Date.UTC(2024, 0, 1 + i)).toISOString().slice(0, 10);
+    const close = i < 50 ? 100 - i * 0.4 : 95 + (i - 50) * 0.8;
+    crossBars.push({ date, open: close, high: close * 1.01, low: close * 0.99, close, volume: 1_000_000 });
+  }
+  const crossEnriched = enrich(crossBars);
+  const spec = parseMaCommand("20일선 돌파");
+  assert(spec?.conditions[0]?.kind === "ma_breakout", "20일선 돌파 스펙");
+  const breakouts = spec ? applyFilter(crossEnriched, spec) : [];
+  assert(breakouts.length >= 1, `이평 돌파 필터 ${breakouts.length}회`);
 }
 
 console.log("\n[7] 빠른 신호 — 실제로 걸리는가");
@@ -310,6 +323,22 @@ console.log("\n[8] 알림 판정 (마지막 봉)");
       message.includes("TEST") &&
       message.includes(spikeEnriched[spikeEnriched.length - 1].date),
     "알림 메시지에 티커와 날짜가 들어감",
+  );
+
+  const today = new Date().toISOString().slice(0, 10);
+  const stockToday = enrich([
+    ...fixture().slice(0, 80),
+    { date: today, open: 100, high: 102, low: 99, close: 101, volume: 5_000_000 },
+  ]);
+  const stockHit = checkLatest(stockToday, "volume_spike", null, "AAPL");
+  assert(
+    stockHit?.bar.date === today,
+    "주식 알림은 오늘(장 마감) 봉을 본다",
+  );
+  const cryptoHit = checkLatest(stockToday, "volume_spike", null, "BTC-USD");
+  assert(
+    cryptoHit == null || cryptoHit.bar.date !== today,
+    "코인 알림은 미완성 오늘 봉을 건너뛴다",
   );
 }
 

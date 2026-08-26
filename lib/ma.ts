@@ -4,6 +4,7 @@ import { smaValue } from "@/lib/indicators";
 export const DEFAULT_SHORT_MA = 20;
 export const DEFAULT_LONG_MA = 60;
 export const DEFAULT_TOUCH_MA = 20;
+export const DEFAULT_BREAKOUT_MA = 200;
 export const MAX_MA_PERIOD = 500;
 
 export type MaParams = {
@@ -62,6 +63,21 @@ export function maTouchSpec(period = DEFAULT_TOUCH_MA): FilterSpec {
   };
 }
 
+export function maBreakoutSpec(
+  period = DEFAULT_BREAKOUT_MA,
+  direction: "up" | "down" = "up",
+): FilterSpec {
+  const p = clampPeriod(period, DEFAULT_BREAKOUT_MA);
+  const way = direction === "down" ? "하향" : "상향";
+  return {
+    conditions: [{ kind: "ma_breakout", period: p, direction }],
+    logic: "AND",
+    preset: null,
+    interpretation: `종가가 ${p}일선을 ${way} 돌파한 날`,
+    confidence: "high",
+  };
+}
+
 export function parseMaCommand(command: string): FilterSpec | null {
   const s = command.trim();
   if (!s) return null;
@@ -90,6 +106,16 @@ export function parseMaCommand(command: string): FilterSpec | null {
 
   if (s === "골든크로스") return maCrossSpec("golden");
   if (s === "데드크로스") return maCrossSpec("death");
+
+  // 종가 vs 이평선 돌파. Gemini로 넘기면 모델 체인 타임아웃으로 502가 난다.
+  // "강한 돌파"(거래량 칩)는 이평/일선이 없어서 여기 안 걸린다.
+  if (/돌파/.test(s) && /(\d+)\s*일|이평|이동평균|\bma\b/i.test(s) && !/(골든|데드)/.test(s)) {
+    const dayNums = [...s.matchAll(/(\d+)\s*일/g)].map((m) => Number(m[1]));
+    const maNum = s.match(/ma\s*(\d+)/i);
+    const period = dayNums[0] ?? (maNum ? Number(maNum[1]) : DEFAULT_BREAKOUT_MA);
+    const direction: "up" | "down" = /하향|아래/.test(s) ? "down" : "up";
+    return maBreakoutSpec(period, direction);
+  }
 
   const touchLoose = s.match(/(\d+)\s*일(?:선|이동평균선?)?\s*(?:에\s*)?(?:터치|닿)/);
   if (touchLoose) return maTouchSpec(Number(touchLoose[1]));
@@ -139,6 +165,23 @@ export function isMaTouch(bars: EnrichedBar[], i: number, period: number): boole
   return awayYesterday && hitToday;
 }
 
+export function isMaBreakout(
+  bars: EnrichedBar[],
+  i: number,
+  period: number,
+  direction: "up" | "down",
+): boolean {
+  if (i < 1) return false;
+  const closes = closesOf(bars);
+  const prev = smaValue(closes, i - 1, period);
+  const now = smaValue(closes, i, period);
+  if (prev == null || now == null) return false;
+  if (direction === "down") {
+    return bars[i - 1].close >= prev && bars[i].close < now;
+  }
+  return bars[i - 1].close <= prev && bars[i].close > now;
+}
+
 export function testMaCondition(bars: EnrichedBar[], i: number, c: Condition): boolean | null {
   if (c.kind === "ma_cross") {
     return c.direction === "death"
@@ -147,6 +190,9 @@ export function testMaCondition(bars: EnrichedBar[], i: number, c: Condition): b
   }
   if (c.kind === "ma_touch") {
     return isMaTouch(bars, i, c.period);
+  }
+  if (c.kind === "ma_breakout") {
+    return isMaBreakout(bars, i, c.period, c.direction);
   }
   return null;
 }
@@ -157,7 +203,7 @@ export function periodsFromSpec(spec: FilterSpec): number[] {
     if (c.kind === "ma_cross") {
       out.add(c.short);
       out.add(c.long);
-    } else if (c.kind === "ma_touch") {
+    } else if (c.kind === "ma_touch" || c.kind === "ma_breakout") {
       out.add(c.period);
     }
   }

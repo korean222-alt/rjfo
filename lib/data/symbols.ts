@@ -1,7 +1,19 @@
 /** Yahoo 스타일 티커를 Twelve Data 심볼로. 암호는 BTC/USD 형태를 쓴다. */
 export function toTwelveSymbol(ticker: string): string {
   if (/^[A-Z0-9]+-USD$/.test(ticker)) return ticker.replace("-USD", "/USD");
+  if (/^\d{6}\.(KS|KQ)$/.test(ticker)) return ticker.replace(/\.(KS|KQ)$/, ".KR");
   return ticker;
+}
+
+/**
+ * 한국 6자리 종목은 KOSPI(.KS) / KOSDAQ(.KQ) 둘 다 시도한다.
+ * 사용자가 005930만 넣으면 .KS가 기본이고, 없으면 .KQ.
+ */
+export function tickerFallbacks(ticker: string): string[] {
+  const m = ticker.match(/^(\d{6})\.(KS|KQ)$/);
+  if (!m) return [ticker];
+  const other = m[2] === "KS" ? "KQ" : "KS";
+  return [ticker, `${m[1]}.${other}`];
 }
 
 /**
