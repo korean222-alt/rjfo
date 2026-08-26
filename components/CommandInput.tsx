@@ -1,5 +1,6 @@
 "use client";
 
+import MaControls from "@/components/MaControls";
 import { PRESET_CHIPS } from "@/lib/presets";
 
 type Props = {
@@ -18,18 +19,20 @@ export default function CommandInput({ value, onChange }: Props) {
         rows={3}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="예: 20일 평균 대비 거래량 2.0배 이상이고 종가 변동이 ±2.0% 이내인 날"
+        placeholder="예: 이평 20/60 골든크로스, 20일선 터치"
         className="w-full rounded-xl bg-surface border border-border px-4 py-3 outline-none
                    focus:border-muted resize-none leading-relaxed"
       />
 
+      <MaControls value={value} onChange={onChange} />
+
       <section className="mt-4" aria-label="빠른 신호 선택">
         <div className="mb-2 flex items-baseline justify-between gap-3">
           <p className="text-sm font-medium">빠른 신호 선택</p>
-          <p className="text-xs text-muted">선택하면 위 명령이 바뀝니다</p>
+          <p className="text-xs text-muted">선택하면 위 명령이 바댝니다</p>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          {PRESET_CHIPS.map((chip) => {
+          {PRESET_CHIPS.filter((chip) => chip.key !== "golden_cross" && chip.key !== "death_cross" && chip.key !== "ma_touch").map((chip) => {
             const selected = value === chip.command;
             return (
               <button

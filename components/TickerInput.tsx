@@ -15,9 +15,8 @@ export default function TickerInput({ value, onChange, error }: Props) {
       <input
         id="ticker"
         value={value}
-        // 대문자 자동 변환
         onChange={(e) => onChange(e.target.value.toUpperCase())}
-        placeholder="AAPL"
+        placeholder="AAPL 또는 BTC"
         autoCapitalize="characters"
         autoCorrect="off"
         spellCheck={false}
@@ -25,6 +24,7 @@ export default function TickerInput({ value, onChange, error }: Props) {
         className={`w-full rounded-xl bg-surface border px-4 py-3 tracking-widest font-semibold outline-none transition
           ${error ? "border-down" : "border-border focus:border-muted"}`}
       />
+      <p className="mt-1.5 text-xs text-muted">주식은 AAPL, 비트코인은 BTC · BTC-USD · 비트코인 모두 됩니다.</p>
       {error ? <p className="mt-1.5 text-sm text-down">{error}</p> : null}
     </div>
   );

@@ -2,6 +2,7 @@ import { json } from "@/lib/json-response";
 import { AlertStoreError, addWatch, alertsAvailable, listWatches, removeWatch } from "@/lib/alerts/store";
 import { telegramStatus } from "@/lib/alerts/telegram";
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
+import type { MaParams } from "@/lib/ma";
 import { ALERT_SIGNALS, findChip } from "@/lib/presets";
 
 export const runtime = "nodejs";
@@ -25,9 +26,21 @@ function fail(e: unknown) {
   );
 }
 
+function readParams(raw: unknown): MaParams | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const short = typeof o.short === "number" ? o.short : Number(o.short);
+  const long = typeof o.long === "number" ? o.long : Number(o.long);
+  const period = typeof o.period === "number" ? o.period : Number(o.period);
+  return {
+    short: Number.isFinite(short) ? short : undefined,
+    long: Number.isFinite(long) ? long : undefined,
+    period: Number.isFinite(period) ? period : undefined,
+  };
+}
+
 export async function GET() {
   if (!alertsAvailable()) {
-    // 저장소가 없다는 건 에러가 아니라 "아직 설정 전"이다. 화면이 안내를 띄울 수 있게 200으로 준다.
     return json({ watches: [], ...status() });
   }
   try {
@@ -38,7 +51,7 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  let body: { ticker?: unknown; signal?: unknown };
+  let body: { ticker?: unknown; signal?: unknown; params?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -56,7 +69,7 @@ export async function POST(req: Request) {
   if (!chip) return json({ error: "신호를 선택해 주세요." }, { status: 400 });
 
   try {
-    const watches = await addWatch(ticker, chip.key);
+    const watches = await addWatch(ticker, chip.key, readParams(body.params));
     return json({ watches, ...status() });
   } catch (e) {
     return fail(e);
