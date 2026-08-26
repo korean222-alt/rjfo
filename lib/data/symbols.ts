@@ -12,5 +12,8 @@ export function toStooqCryptoSymbol(ticker: string): string | null {
   if (ticker === "BTC-USD") return "BTCUSD.V";
   if (ticker === "ETH-USD") return "ETHUSD.V";
   if (ticker === "SOL-USD") return "SOLUSD.V";
+  if (ticker === "XRP-USD") return "XRPUSD.V";
+  if (ticker === "DOGE-USD") return "DOGEUSD.V";
+  if (ticker === "ADA-USD") return "ADAUSD.V";
   return null;
 }

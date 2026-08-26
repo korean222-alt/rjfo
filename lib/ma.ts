@@ -5,6 +5,12 @@ export const DEFAULT_SHORT_MA = 20;
 export const DEFAULT_LONG_MA = 60;
 export const DEFAULT_TOUCH_MA = 20;
 
+export type MaParams = {
+  short?: number;
+  long?: number;
+  period?: number;
+};
+
 export function clampPeriod(n: number, fallback = DEFAULT_SHORT_MA): number {
   if (!Number.isFinite(n)) return fallback;
   return Math.min(250, Math.max(2, Math.round(n)));
@@ -50,7 +56,7 @@ export function maTouchSpec(period = DEFAULT_TOUCH_MA): FilterSpec {
     conditions: [{ kind: "ma_touch", period: p }],
     logic: "AND",
     preset: null,
-    interpretation: `가격이 ${p}일 이동평균선에 닮은 날`,
+    interpretation: `가격이 ${p}일 이동평균선에 닿은 날`,
     confidence: "high",
   };
 }
@@ -64,11 +70,11 @@ export function parseMaCommand(command: string): FilterSpec | null {
     return maCrossSpec(pairCmd[3].startsWith("골든") ? "golden" : "death", Number(pairCmd[1]), Number(pairCmd[2]));
   }
 
-  const touchCmd = s.match(/^이평\s*(\d+)\s*(?:선\s*)?(?:터치|닮음?)$/);
+  const touchCmd = s.match(/^이평\s*(\d+)\s*(?:선\s*)?(?:터치|닿음?)$/);
   if (touchCmd) return maTouchSpec(Number(touchCmd[1]));
 
   const pairLoose = s.match(
-    /(\d+)\s*일(?:선|이동평균선?)?\s*(?:과|이|,|\/)?\s*(\d+)\s*일(?:선|이동평균선?)?.{0,16}(골든|데드)/,
+    /(\d+)\s*일(?:선|이동평균선?)?\s*(?:과|이|,|\/)?\s*(\d+)\s*일(?:선|이동평균선?).{0,16}(골든|데드)/,
   );
   if (pairLoose) {
     return maCrossSpec(pairLoose[3].startsWith("골든") ? "golden" : "death", Number(pairLoose[1]), Number(pairLoose[2]));
@@ -84,10 +90,10 @@ export function parseMaCommand(command: string): FilterSpec | null {
   if (s === "골든크로스") return maCrossSpec("golden");
   if (s === "데드크로스") return maCrossSpec("death");
 
-  const touchLoose = s.match(/(\d+)\s*일(?:선|이동평균선?)?\s*(?:에\s*)?(?:터치|닮)/);
+  const touchLoose = s.match(/(\d+)\s*일(?:선|이동평균선?)?\s*(?:에\s*)?(?:터치|닿)/);
   if (touchLoose) return maTouchSpec(Number(touchLoose[1]));
 
-  if (/이평선?\s*(?:에\s*)?(?:터치|닮)|이동평균선?\s*(?:에\s*)?(?:터치|닮)/.test(s)) {
+  if (/이평선?\s*(?:에\s*)?(?:터치|닿)|이동평균선?\s*(?:에\s*)?(?:터치|닿)/.test(s)) {
     const nums = [...s.matchAll(/(\d+)\s*일/g)].map((m) => Number(m[1]));
     return maTouchSpec(nums[0] ?? DEFAULT_TOUCH_MA);
   }
@@ -155,4 +161,14 @@ export function periodsFromSpec(spec: FilterSpec): number[] {
     }
   }
   return [...out].sort((a, b) => a - b);
+}
+
+export function smaLine(closes: { date: string; close: number }[], period: number): { date: string; value: number }[] {
+  const values = closes.map((c) => c.close);
+  const out: { date: string; value: number }[] = [];
+  for (let i = 0; i < closes.length; i++) {
+    const v = smaValue(values, i, period);
+    if (v != null) out.push({ date: closes[i].date, value: v });
+  }
+  return out;
 }
