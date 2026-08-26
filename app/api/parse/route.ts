@@ -1,5 +1,6 @@
 import { json } from "@/lib/json-response";
 import { generateText, GeminiError, type GeminiTurn } from "@/lib/gemini";
+import { parseMaCommand } from "@/lib/ma";
 import { FEW_SHOT, PARSER_SYSTEM_PROMPT } from "@/lib/parse-prompt";
 import { extractJson, validateSpec } from "@/lib/validate-spec";
 import { PRESET_CHIPS } from "@/lib/presets";
@@ -10,7 +11,6 @@ export const dynamic = "force-dynamic";
 
 const EXAMPLE_HINT = `예: ${PRESET_CHIPS.map((c) => `"${c.label}"`).join(", ")}`;
 
-/** few-shot을 대화 형태로 넣는다. */
 function fewShotHistory(): GeminiTurn[] {
   return FEW_SHOT.flatMap((ex) => [
     { role: "user" as const, text: `입력: "${ex.input}"` },
@@ -34,7 +34,6 @@ export async function POST(req: Request) {
     return json({ error: "명령이 너무 깁니다 (500자 이내)." }, { status: 400 });
   }
 
-  // 빠른 신호는 AI 해석을 거치지 않는다. 칩에 적힌 조건을 그대로 쓴다 (결과가 항상 같다).
   const selected = PRESET_CHIPS.find((chip) => chip.command === command);
   if (selected) {
     const spec: FilterSpec = {
@@ -48,7 +47,11 @@ export async function POST(req: Request) {
     return json({ spec, model: "preset" });
   }
 
-  // 직접 입력한 자유 명령만 AI로 해석한다.
+  const maSpec = parseMaCommand(command);
+  if (maSpec) {
+    return json({ spec: maSpec, model: "ma" });
+  }
+
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   if (!apiKey) {
     return json(
@@ -62,7 +65,6 @@ export async function POST(req: Request) {
   let lastRaw = "";
   let lastDetail = "";
 
-  // JSON 파싱 실패 시 1회 재시도 (모델 폴백 체인 자체는 lib/gemini.ts가 처리한다)
   for (let attempt = 0; attempt < 2; attempt++) {
     const retrying = attempt > 0;
     try {
@@ -84,7 +86,6 @@ export async function POST(req: Request) {
       return json({ spec, model });
     } catch (e) {
       if (e instanceof GeminiError) {
-        // 모델 호출 자체가 실패한 경우는 재시도해도 같다 (체인을 이미 다 돌았다).
         return json(
           { error: e.message, attempts: e.attempts },
           { status: e.status },
