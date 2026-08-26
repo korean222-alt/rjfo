@@ -1,46 +1,50 @@
+import {
+  DEFAULT_LONG_MA,
+  DEFAULT_SHORT_MA,
+  DEFAULT_TOUCH_MA,
+  maCrossCommand,
+  maCrossSpec,
+  maTouchCommand,
+  maTouchSpec,
+  orderedPair,
+  clampPeriod,
+  type MaParams,
+} from "@/lib/ma";
 import type { Condition, FilterSpec, PresetName } from "@/types";
 
 export const PRESET_CONDITIONS: Record<PresetName, Condition[]> = {
-  // 물량 흡수: 거래량은 터졌는데 주가는 안 움직임
   absorption: [
     { metric: "volume_ratio_20d", op: ">=", value: 2.0 },
     { metric: "abs_close_change_pct", op: "<=", value: 2.0 },
   ],
-  // 고가마감: 거래량 증가 + 고가 부근 마감
   high_close: [
     { metric: "volume_ratio_20d", op: ">=", value: 1.8 },
     { metric: "close_position_in_range", op: ">=", value: 0.75 },
   ],
-  // 누적 매집: 상승일에 거래량이 몰림
   accumulation: [
     { metric: "up_down_vol_ratio_20d", op: ">=", value: 1.5 },
     { metric: "obv_slope_20d", op: ">=", value: 0.3 },
   ],
-  // 상승 전 압축: 평소보다 좁아진 변동폭 속에서 거래량·종가 위치가 개선되는지 확인
   squeeze: [
     { metric: "atr_ratio_20d", op: "<=", value: 0.8 },
     { metric: "volume_ratio_20d", op: ">=", value: 1.2 },
     { metric: "close_position_in_range", op: ">=", value: 0.6 },
   ],
-  // 거래량 확장: 평소 대비 뚜렷한 거래량 증가가 나온 날
   volume_expansion: [
     { metric: "volume_ratio_20d", op: ">=", value: 2.5 },
     { metric: "volume_zscore_60d", op: ">=", value: 1.5 },
   ],
-  // 강한 돌파: 거래량 급증과 함께 고가권에서 강하게 마감한 날
   strong_breakout: [
     { metric: "volume_ratio_20d", op: ">=", value: 2.0 },
     { metric: "close_change_pct", op: ">=", value: 2.0 },
     { metric: "close_position_in_range", op: ">=", value: 0.85 },
   ],
-  // 수급 개선: 상승일 거래량 우위와 OBV 방향이 동시에 개선되는지 확인
   flow_improvement: [
     { metric: "up_down_vol_ratio_20d", op: ">=", value: 1.4 },
     { metric: "obv_slope_20d", op: ">=", value: 0.15 },
   ],
 };
 
-/** 알림 등록에 쓰는 신호 키. lookahead 신호는 실시간 알림 대상이 아니다. */
 export type SignalKey =
   | "volume_spike"
   | "absorption"
@@ -50,12 +54,14 @@ export type SignalKey =
   | "squeeze"
   | "strong_breakout"
   | "volume_expansion"
-  | "flow_improvement";
+  | "flow_improvement"
+  | "golden_cross"
+  | "death_cross"
+  | "ma_touch";
 
 export type PresetChip = {
   key: SignalKey;
   label: string;
-  /** 수식 그대로 — 초기 버전대로 조건을 숫자로 명시한다. */
   hint: string;
   command: string;
   conditions: Condition[];
@@ -63,7 +69,10 @@ export type PresetChip = {
   lookahead?: FilterSpec["lookahead"];
 };
 
-/** UI 프리셋 카드 — 선택 시 아래 수치 조건을 그대로 적용한다. */
+const defaultGolden = maCrossSpec("golden");
+const defaultDeath = maCrossSpec("death");
+const defaultTouch = maTouchSpec();
+
 export const PRESET_CHIPS: PresetChip[] = [
   {
     key: "volume_spike",
@@ -142,11 +151,81 @@ export const PRESET_CHIPS: PresetChip[] = [
     conditions: PRESET_CONDITIONS.flow_improvement,
     preset: "flow_improvement",
   },
+  {
+    key: "golden_cross",
+    label: "골든크로스",
+    hint: `단기선이 장기선을 위로 돌파 (기본 ${DEFAULT_SHORT_MA}/${DEFAULT_LONG_MA})`,
+    command: maCrossCommand("golden"),
+    conditions: defaultGolden.conditions,
+    preset: null,
+  },
+  {
+    key: "death_cross",
+    label: "데드크로스",
+    hint: `단기선이 장기선을 아래로 관통 (기본 ${DEFAULT_SHORT_MA}/${DEFAULT_LONG_MA})`,
+    command: maCrossCommand("death"),
+    conditions: defaultDeath.conditions,
+    preset: null,
+  },
+  {
+    key: "ma_touch",
+    label: "이평선 터치",
+    hint: `가격이 이동평균선에 닿는 날 (기본 ${DEFAULT_TOUCH_MA}일)`,
+    command: maTouchCommand(),
+    conditions: defaultTouch.conditions,
+    preset: null,
+  },
 ];
 
 export function findChip(key: string): PresetChip | null {
   return PRESET_CHIPS.find((c) => c.key === key) ?? null;
 }
 
-/** 알림으로 받을 수 있는 신호 — 미래를 보는 lookahead 신호는 제외한다. */
 export const ALERT_SIGNALS: PresetChip[] = PRESET_CHIPS.filter((c) => !c.lookahead);
+
+export function isMaSignal(key: string): key is "golden_cross" | "death_cross" | "ma_touch" {
+  return key === "golden_cross" || key === "death_cross" || key === "ma_touch";
+}
+
+export function normalizeMaParams(signal: SignalKey, raw?: MaParams | null): MaParams | undefined {
+  if (signal === "golden_cross" || signal === "death_cross") {
+    const pair = orderedPair(raw?.short ?? DEFAULT_SHORT_MA, raw?.long ?? DEFAULT_LONG_MA);
+    return { short: pair.short, long: pair.long };
+  }
+  if (signal === "ma_touch") {
+    return { period: clampPeriod(raw?.period ?? raw?.short ?? DEFAULT_TOUCH_MA) };
+  }
+  return undefined;
+}
+
+export function specForSignal(signal: SignalKey, params?: MaParams | null): FilterSpec | null {
+  const chip = findChip(signal);
+  if (!chip || chip.lookahead) return null;
+
+  if (signal === "golden_cross" || signal === "death_cross") {
+    const pair = orderedPair(params?.short ?? DEFAULT_SHORT_MA, params?.long ?? DEFAULT_LONG_MA);
+    return maCrossSpec(signal === "death_cross" ? "death" : "golden", pair.short, pair.long);
+  }
+  if (signal === "ma_touch") {
+    return maTouchSpec(params?.period ?? params?.short ?? DEFAULT_TOUCH_MA);
+  }
+
+  return {
+    conditions: chip.conditions,
+    logic: "AND",
+    preset: chip.preset,
+    lookahead: chip.lookahead,
+    interpretation: chip.label,
+    confidence: "high",
+  };
+}
+
+export function labelForWatch(signal: SignalKey, params?: MaParams | null): string {
+  const chip = findChip(signal);
+  const base = chip?.label ?? signal;
+  const normalized = normalizeMaParams(signal, params);
+  if (!normalized) return base;
+  if (normalized.period) return `${base} (${normalized.period}일)`;
+  if (normalized.short && normalized.long) return `${base} (${normalized.short}/${normalized.long})`;
+  return base;
+}

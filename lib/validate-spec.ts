@@ -1,4 +1,5 @@
-import { METRICS, OPS, type FilterSpec, type Metric, type Op } from "@/types";
+import { METRICS, OPS, type Condition, type FilterSpec, type Metric, type Op } from "@/types";
+import { clampPeriod, orderedPair } from "@/lib/ma";
 import { PRESET_CONDITIONS } from "./presets";
 
 export class SpecValidationError extends Error {}
@@ -11,29 +12,37 @@ function isOp(v: unknown): v is Op {
 }
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** LLM 출력은 신뢰하지 않는다. 알려진 값만 통과시키고 나머지는 버린다. */
+function parseCondition(c: unknown): Condition[] {
+  if (typeof c !== "object" || c === null) return [];
+  const cc = c as Record<string, unknown>;
+
+  if (cc.kind === "ma_cross") {
+    const pair = orderedPair(Number(cc.short), Number(cc.long));
+    const direction = cc.direction === "death" ? "death" : "golden";
+    return [{ kind: "ma_cross", short: pair.short, long: pair.long, direction }];
+  }
+  if (cc.kind === "ma_touch") {
+    return [{ kind: "ma_touch", period: clampPeriod(Number(cc.period)) }];
+  }
+
+  const value = typeof cc.value === "number" ? cc.value : Number(cc.value);
+  if (!isMetric(cc.metric) || !isOp(cc.op) || !isFinite(value)) return [];
+  return [{ metric: cc.metric, op: cc.op, value }];
+}
+
 export function validateSpec(raw: unknown): FilterSpec {
   if (typeof raw !== "object" || raw === null) {
     throw new SpecValidationError("JSON 객체가 아닙니다.");
   }
   const o = raw as Record<string, unknown>;
 
-  const conditions = Array.isArray(o.conditions)
-    ? o.conditions.flatMap((c) => {
-        if (typeof c !== "object" || c === null) return [];
-        const cc = c as Record<string, unknown>;
-        const value = typeof cc.value === "number" ? cc.value : Number(cc.value);
-        if (!isMetric(cc.metric) || !isOp(cc.op) || !isFinite(value)) return [];
-        return [{ metric: cc.metric, op: cc.op, value }];
-      })
-    : [];
+  const conditions = Array.isArray(o.conditions) ? o.conditions.flatMap(parseCondition) : [];
 
   const preset =
     typeof o.preset === "string" && o.preset in PRESET_CONDITIONS
       ? (o.preset as FilterSpec["preset"])
       : null;
 
-  // preset만 오고 conditions가 비었으면 프리셋 정의로 채운다.
   const finalConditions =
     conditions.length > 0 ? conditions : preset ? PRESET_CONDITIONS[preset] : [];
 
@@ -47,7 +56,6 @@ export function validateSpec(raw: unknown): FilterSpec {
     const days = Number(l.days);
     const min = Number(l.min_return_pct);
     if (isFinite(days) && days > 0 && isFinite(min)) {
-      // 과도한 창은 잘라낸다 (5년 데이터 기준)
       lookahead = { days: Math.min(Math.round(days), 250), min_return_pct: min };
     }
   }
@@ -74,7 +82,6 @@ export function validateSpec(raw: unknown): FilterSpec {
   };
 }
 
-/** 모델이 백틱이나 서문을 붙였을 때를 대비해 JSON 본문만 추출한다. */
 export function extractJson(text: string): unknown {
   const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim();
   try {
