@@ -20,8 +20,9 @@ export async function GET(req: Request) {
     return json({ error: `'${ticker}'는 올바른 티커 형식이 아닙니다.` }, { status: 400 });
   }
 
+  const providers = getProviders();
   const sources = [];
-  for (const provider of getProviders()) {
+  for (const provider of providers) {
     const started = Date.now();
     try {
       const bars = await provider.getDailyBars(ticker, 5);
@@ -44,8 +45,12 @@ export async function GET(req: Request) {
     }
   }
 
+  const primary = sources[0];
+
   return json({
     ticker,
+    // 실제로 어떤 순서로 시도하는지. 여기에 twelvedata가 없으면 키가 함수에 안 들어온 것이다.
+    chain: providers.map((p) => p.name),
     // 어떤 환경변수가 실제로 함수에 들어와 있는지 (값은 노출하지 않는다)
     env: {
       DATA_PROVIDER: process.env.DATA_PROVIDER ?? null,
@@ -59,6 +64,8 @@ export async function GET(req: Request) {
       ? process.env.TWELVE_DATA_API_KEY
         ? "모든 소스 실패. 위 error를 보고 원인을 확인하세요."
         : "무료 소스가 서버 IP를 차단했습니다. twelvedata.com 무료 키를 TWELVE_DATA_API_KEY 환경변수에 넣으면 해결됩니다."
-      : "서버에서 시세 조회 가능.",
+      : primary && !primary.ok
+        ? `1순위 소스(${primary.source})가 실패해 폴백으로 넘어갔습니다. 위 ${primary.source}의 error가 진짜 원인입니다.`
+        : "서버에서 시세 조회 가능.",
   });
 }

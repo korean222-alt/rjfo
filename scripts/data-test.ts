@@ -364,6 +364,61 @@ console.log("\n[14] 키가 없고 전부 막히면 무엇을 해야 하는지 �
   assert(msg.includes("TWELVE_DATA_API_KEY"), `조치 방법이 담긴 안내: ${msg}`);
 }
 
+console.log("\n[15] 1순위 소스의 실패 사유가 폴백 메시지에 가려지지 않는다");
+{
+  reset();
+  process.env.TWELVE_DATA_API_KEY = "test-key";
+  install((url) => {
+    if (url.includes("api.twelvedata.com")) {
+      return new Response(
+        JSON.stringify({
+          code: 403,
+          status: "error",
+          message: "/time_series is available exclusively with pro plan",
+        }),
+        { status: 200 },
+      );
+    }
+    if (url.includes("stooq")) return new Response("Blocked by robots", { status: 200 });
+    return new Response("Too Many Requests", { status: 429 });
+  });
+  let err: unknown = null;
+  try {
+    await loadBars("XYZ1");
+  } catch (e) {
+    err = e;
+  }
+  restore();
+  const msg = (err as Error).message;
+  assert(msg.includes("twelvedata"), `어느 소스가 실패했는지 남는다: ${msg}`);
+  assert(msg.includes("plan"), "1순위 소스의 실제 사유(플랜 제한)가 살아 있다");
+  assert(
+    err instanceof DataProviderError && err.status !== 404,
+    `폴백의 가짜 404로 덮이지 않는다 (status ${(err as DataProviderError).status})`,
+  );
+}
+
+console.log("\n[16] Stooq의 차단 응답은 '티커 없음'이 아니다");
+{
+  reset();
+  install((url) => {
+    if (url.includes("stooq")) return new Response("Please enable JavaScript", { status: 200 });
+    return new Response("Too Many Requests", { status: 429 });
+  });
+  let err: unknown = null;
+  try {
+    await loadBars("XYZ2");
+  } catch (e) {
+    err = e;
+  }
+  restore();
+  assert(
+    err instanceof DataProviderError && err.status !== 404,
+    `차단 응답을 404로 분류하지 않는다 (status ${(err as DataProviderError).status})`,
+  );
+  assert((err as Error).message.includes("TWELVE_DATA_API_KEY"), "키가 없으면 조치 방법을 알려준다");
+}
+
 console.log(failures === 0 ? "\n✅ 전부 통과\n" : `\n❌ ${failures}개 실패\n`);
 process.exit(failures === 0 ? 0 : 1);
 

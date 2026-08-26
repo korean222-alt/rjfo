@@ -148,7 +148,12 @@ async function fetchCsvBars(base: string, symbol: string, ticker: string): Promi
         502,
       );
     }
-    throw new DataProviderError(`'${ticker}' 보조 소스 응답: ${head}`, 404);
+    // Stooq가 "없는 심볼"이라고 말할 때만 404다. 그 외의 안내 문구(차단·점검·한도)를
+    // 404로 분류하면 상위 체인이 그걸 "티커가 없다"로 믿어 진짜 원인이 가려진다.
+    if (/no data|brak danych/i.test(head)) {
+      throw new DataProviderError(`'${ticker}' 보조 소스에 데이터가 없습니다.`, 404);
+    }
+    throw new DataProviderError(`'${ticker}' 보조 소스 응답: ${head}`, 502);
   }
 
   return bars;
