@@ -6,6 +6,7 @@ import { toDailyFunding } from "../lib/data/funding";
 import { enrich } from "../lib/indicators";
 import { parseAssistantIntent } from "../lib/assistant-intent";
 import { isCryptoTicker, normalizeTicker } from "../lib/data/provider";
+import { getProviders } from "../lib/data";
 import { parseMaCommand } from "../lib/ma";
 import { parseLocalCommand } from "../lib/parse-local";
 import { scanMaBreakout, scanSurgePrelude } from "../lib/scan";
@@ -184,6 +185,10 @@ console.log("\n[7] 로컬 명령 파싱 (Gemini 없이)");
   assert(normalizeTicker("005930") === "005930.KS", "한국 6자리 → .KS");
   assert(normalizeTicker("삼성전자") === "005930.KS", "삼성전자 별칭");
   assert(normalizeTicker("005930.KQ") === "005930.KQ", "이미 붙은 KOSDAQ 접미사는 유지");
+  assert(
+    getProviders("005930.KS").every((p) => p.name !== "twelvedata"),
+    "한국 종목은 Twelve Data를 건너뛴다",
+  );
 }
 
 console.log("\n[8] 이평선 돌파 명령은 Gemini 없이");

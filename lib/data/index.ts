@@ -58,6 +58,11 @@ export function getProviders(ticker?: string): DataProvider[] {
   if (ticker && isCryptoTicker(ticker) && process.env.DATA_PROVIDER !== "crypto") {
     return [new CryptoExchangeProvider(), ...chain];
   }
+  // 한국 종목은 Twelve Data 무료 플랜에 없다. 키를 써가며 404/플랜 에러를
+  // 맞으면 '티커 없음'으로 오인되어 브라우저 폴백 안내가 꼬인다.
+  if (ticker && /^\d{6}\.(KS|KQ)$/.test(ticker) && process.env.DATA_PROVIDER !== "twelvedata") {
+    return chain.filter((p) => p.name !== "twelvedata");
+  }
   return chain;
 }
 
