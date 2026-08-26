@@ -6,8 +6,10 @@ import {
   LineStyle,
   createChart,
   type IChartApi,
+  type SeriesMarker,
   type UTCTimestamp,
 } from "lightweight-charts";
+import { smaLine } from "@/lib/ma";
 
 export type SeriesPoint = {
   date: string;
@@ -18,12 +20,15 @@ export type SeriesPoint = {
   volume: number;
 };
 
+const MA_COLORS = ["#f59e0b", "#a78bfa", "#38bdf8", "#34d399"];
+
 type Props = {
   series: SeriesPoint[];
   matchDates: string[];
+  maPeriods?: number[];
 };
 
-export default function VolumeChart({ series, matchDates }: Props) {
+export default function VolumeChart({ series, matchDates, maPeriods = [] }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
@@ -50,8 +55,6 @@ export default function VolumeChart({ series, matchDates }: Props) {
     });
     chartRef.current = chart;
 
-    // 이전 버전에서 저장된 결과에는 OHLC가 없을 수 있다. 그 경우 종가를 사용해
-    // 평면 캔들로 안전하게 표시하고, 다음 분석부터는 실제 OHLC 캔들이 저장된다.
     const candles = series.map((p) => {
       const open = Number.isFinite(p.open) ? (p.open as number) : p.close;
       const high = Number.isFinite(p.high) ? (p.high as number) : p.close;
@@ -91,19 +94,34 @@ export default function VolumeChart({ series, matchDates }: Props) {
       })),
     );
 
-    // 조건에 맞은 날짜를 캔들 아래의 초록 화살표로 표시한다.
+    const uniquePeriods = [...new Set(maPeriods.filter((n) => Number.isFinite(n) && n >= 2))];
+    for (let i = 0; i < uniquePeriods.length; i++) {
+      const period = uniquePeriods[i];
+      const line = smaLine(series, period);
+      if (!line.length) continue;
+      const seriesApi = chart.addLineSeries({
+        color: MA_COLORS[i % MA_COLORS.length],
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        title: `MA${period}`,
+        crosshairMarkerVisible: false,
+      });
+      seriesApi.setData(line.map((p) => ({ time: p.date as unknown as UTCTimestamp, value: p.value })));
+    }
+
     const matched = new Set(matchDates);
-    candleSeries.setMarkers(
-      series
-        .filter((p) => matched.has(p.date))
-        .map((p) => ({
-          time: p.date as unknown as UTCTimestamp,
-          position: "belowBar" as const,
-          color: "#60a5fa",
-          shape: "arrowUp" as const,
-          text: "신호",
-        })),
-    );
+    const markers: SeriesMarker<UTCTimestamp>[] = series
+      .filter((p) => matched.has(p.date))
+      .map((p) => ({
+        time: p.date as unknown as UTCTimestamp,
+        position: "belowBar" as const,
+        color: "#60a5fa",
+        shape: "arrowUp" as const,
+        text: "신호",
+      }));
+    markers.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+    candleSeries.setMarkers(markers);
 
     chart.timeScale().fitContent();
 
@@ -115,14 +133,17 @@ export default function VolumeChart({ series, matchDates }: Props) {
       chart.remove();
       chartRef.current = null;
     };
-  }, [series, matchDates]);
+  }, [series, matchDates, maPeriods]);
 
   return (
     <section className="rounded-2xl border border-border bg-surface p-3">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold">캔들 차트 · 거래량</h2>
-          <p className="mt-1 text-xs text-muted">파란 화살표는 현재 조건에 매칭된 신호 날짜입니다.</p>
+          <p className="mt-1 text-xs text-muted leading-relaxed">
+            파란 화살표는 현재 조건에 매칭된 신호 날짜입니다.
+            {maPeriods.length ? ` 노란/보라 선은 설정한 이평선(${maPeriods.join(", ")}일)입니다.` : ""}
+          </p>
         </div>
         <a
           href="https://www.tradingview.com/lightweight-charts/"
