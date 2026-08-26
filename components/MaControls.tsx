@@ -71,7 +71,7 @@ export default function MaControls({ value, onChange }: Props) {
     <section className="mt-4 rounded-xl border border-border bg-surface px-4 py-3" aria-label="이평선 설정">
       <p className="text-sm font-medium">이평선 직접 설정</p>
       <p className="mt-1 text-xs leading-relaxed text-muted">
-        기간을 정한 뒤 골든/데드/터치를 고르면 위 명령이 바댝니다. 비트코인(BTC)도 같은 조건으로 분석됩니다.
+        기간을 정한 뒤 골든/데드/터치를 고르면 위 명령이 바뀝니다. 비트코인(BTC)도 같은 조건으로 분석됩니다.
       </p>
 
       <div className="mt-3 grid grid-cols-2 gap-2">
@@ -129,16 +129,31 @@ function PeriodField({
   value: number;
   onChange: (v: number) => void;
 }) {
+  const [text, setText] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setText(String(value));
+  }, [value, focused]);
+
   return (
     <label className="block">
       <span className="block text-xs text-muted">{label} (일)</span>
       <input
-        type="number"
+        type="text"
         inputMode="numeric"
-        min={2}
-        max={250}
-        value={value}
-        onChange={(e) => onChange(clampPeriod(Number(e.target.value)))}
+        pattern="[0-9]*"
+        value={focused ? text : String(value)}
+        onFocus={() => {
+          setFocused(true);
+          setText("");
+        }}
+        onChange={(e) => setText(e.target.value.replace(/\D/g, "").slice(0, 3))}
+        onBlur={() => {
+          setFocused(false);
+          const n = Number(text);
+          onChange(clampPeriod(Number.isFinite(n) && n > 0 ? n : value));
+        }}
         className="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm tabular-nums outline-none focus:border-muted"
       />
     </label>

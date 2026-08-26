@@ -1,7 +1,8 @@
 import type { Bar } from "@/types";
 import { getCachedBars, setCachedBars } from "./cache";
+import { CryptoExchangeProvider, hasUsableVolume } from "./crypto";
 import { FixtureProvider } from "./fixture";
-import { DataProviderError, type DataProvider } from "./provider";
+import { DataProviderError, isCryptoTicker, type DataProvider } from "./provider";
 import { StooqProvider } from "./stooq";
 import { toStooqCryptoSymbol, toTwelveSymbol } from "./symbols";
 import { TwelveDataProvider, twelveDataKey } from "./twelvedata";
@@ -24,26 +25,40 @@ class MappedProvider implements DataProvider {
   }
 }
 
-export function getProviders(): DataProvider[] {
+export function getProviders(ticker?: string): DataProvider[] {
   const twelve = new MappedProvider(new TwelveDataProvider(), toTwelveSymbol);
   const yahoo = new YahooProvider();
   const stooq = new MappedProvider(
     new StooqProvider(),
-    (ticker) => toStooqCryptoSymbol(ticker) ?? ticker,
+    (t) => toStooqCryptoSymbol(t) ?? t,
   );
 
+  let chain: DataProvider[];
   switch (process.env.DATA_PROVIDER) {
     case "fixture":
       return [new FixtureProvider()];
     case "stooq":
-      return [stooq];
+      chain = [stooq];
+      break;
     case "yahoo":
-      return [yahoo];
+      chain = [yahoo];
+      break;
     case "twelvedata":
-      return [twelve];
+      chain = [twelve];
+      break;
+    case "crypto":
+      chain = [new CryptoExchangeProvider()];
+      break;
     default:
-      return twelveDataKey() ? [twelve, yahoo, stooq] : [yahoo, stooq];
+      chain = twelveDataKey() ? [twelve, yahoo, stooq] : [yahoo, stooq];
   }
+
+  // 코인은 Twelve Data volume이 0이라 거래량 분석이 불가능하다.
+  // 거래소 공개 시세(키 없음)를 맨 앞에 둔다.
+  if (ticker && isCryptoTicker(ticker) && process.env.DATA_PROVIDER !== "crypto") {
+    return [new CryptoExchangeProvider(), ...chain];
+  }
+  return chain;
 }
 
 export function getProvider(): DataProvider {
@@ -74,12 +89,19 @@ function tickerNotFound(attempts: Attempt[]): Attempt | null {
 }
 
 async function fetchFromChain(ticker: string): Promise<Bar[]> {
-  const providers = getProviders();
+  const providers = getProviders(ticker);
   const attempts: Attempt[] = [];
 
   for (const provider of providers) {
     try {
-      return await provider.getDailyBars(ticker, YEARS);
+      const bars = await provider.getDailyBars(ticker, YEARS);
+      if (isCryptoTicker(ticker) && !hasUsableVolume(bars)) {
+        throw new DataProviderError(
+          `'${ticker}' 거래량이 비어 있습니다 (${provider.name}).`,
+          422,
+        );
+      }
+      return bars;
     } catch (e) {
       attempts.push({
         source: provider.name,
@@ -124,14 +146,18 @@ export type LoadOptions = {
 
 export async function loadBars(ticker: string, opts: LoadOptions = {}): Promise<Bar[]> {
   const cached = await getCachedBars(ticker);
-  if (cached?.fresh && !opts.forceFresh) return cached.bars;
+  const cacheOk =
+    cached &&
+    (opts.forceFresh ? false : cached.fresh) &&
+    !(isCryptoTicker(ticker) && !hasUsableVolume(cached.bars));
+  if (cacheOk && cached) return cached.bars;
 
   try {
     const bars = await fetchFromChain(ticker);
     await setCachedBars(ticker, bars);
     return bars;
   } catch (e) {
-    if (cached) return cached.bars;
+    if (cached && !(isCryptoTicker(ticker) && !hasUsableVolume(cached.bars))) return cached.bars;
     throw e;
   }
 }

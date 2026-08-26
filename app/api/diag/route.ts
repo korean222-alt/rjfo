@@ -20,17 +20,19 @@ export async function GET(req: Request) {
     return json({ error: `'${ticker}'는 올바른 티커 형식이 아닙니다.` }, { status: 400 });
   }
 
-  const providers = getProviders();
+  const providers = getProviders(ticker);
   const sources = [];
   for (const provider of providers) {
     const started = Date.now();
     try {
       const bars = await provider.getDailyBars(ticker, 5);
+      const nonzero = bars.filter((b) => b.volume > 0).length;
       sources.push({
         source: provider.name,
         ok: true,
         ms: Date.now() - started,
         bars: bars.length,
+        volumeDays: nonzero,
         first: bars[0]?.date ?? null,
         last: bars[bars.length - 1]?.date ?? null,
       });

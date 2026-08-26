@@ -101,6 +101,27 @@ function stooqCsv(days = 90): string {
   return rows.join("\n");
 }
 
+
+function okxCandles(days = 120): Response {
+  const data: string[][] = [];
+  const newest = Date.UTC(2024, 5, 1);
+  for (let i = 0; i < days; i++) {
+    const ts = newest - i * 86400000;
+    const c = (60000 + i).toFixed(2);
+    data.push([String(ts), c, c, c, c, "10", "1000", "250000000", "1"]);
+  }
+  return new Response(JSON.stringify({ code: "0", data }), { status: 200 });
+}
+
+function twelveZeroVolume(days = 90): Response {
+  const values = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(Date.UTC(2024, 0, 2 + i)).toISOString().slice(0, 10);
+    values.push({ datetime: d, open: "1", high: "1", low: "1", close: "1", volume: "0" });
+  }
+  return new Response(JSON.stringify({ status: "ok", values }), { status: 200 });
+}
+
 const main = async () => {
 
 console.log("\n[1] Stooq 심볼 매핑");
@@ -417,6 +438,37 @@ console.log("\n[16] Stooq의 차단 응답은 '티커 없음'이 아니다");
     `차단 응답을 404로 분류하지 않는다 (status ${(err as DataProviderError).status})`,
   );
   assert((err as Error).message.includes("TWELVE_DATA_API_KEY"), "키가 없으면 조치 방법을 알려준다");
+}
+
+console.log("\n[17] 코인 거래량 0인 Twelve Data는 건너뛰고 거래소 시세를 쓴다");
+{
+  reset();
+  process.env.TWELVE_DATA_API_KEY = "test-key";
+  install((url) => {
+    if (url.includes("okx.com")) return okxCandles(120);
+    if (url.includes("api.twelvedata.com")) return twelveZeroVolume(90);
+    return new Response("Too Many Requests", { status: 429 });
+  });
+  const bars = await loadBars("BTC-USD");
+  restore();
+  assert(bars.length >= 60, `코인 일봉 ${bars.length}개`);
+  assert(bars.every((b) => b.volume > 0), "거래량이 0이 아니다");
+  assert(calls.some((u) => u.includes("okx.com")), "OKX 공개 시세를 사용");
+}
+
+console.log("\n[18] 주식은 코인 거래소를 부르지 않는다");
+{
+  reset();
+  process.env.TWELVE_DATA_API_KEY = "test-key";
+  install((url) => {
+    if (url.includes("okx.com")) return new Response("should not hit", { status: 500 });
+    if (url.includes("api.twelvedata.com")) return twelveJson(80);
+    return new Response("Too Many Requests", { status: 429 });
+  });
+  const bars = await loadBars("NVDA");
+  restore();
+  assert(bars.length === 80, `주식은 Twelve Data ${bars.length}개`);
+  assert(!calls.some((u) => u.includes("okx.com")), "주식 조회는 OKX를 안 탄다");
 }
 
 console.log(failures === 0 ? "\n✅ 전부 통과\n" : `\n❌ ${failures}개 실패\n`);

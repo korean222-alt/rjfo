@@ -9,7 +9,8 @@ import SummaryCard from "@/components/SummaryCard";
 import TickerInput from "@/components/TickerInput";
 import { runAnalyze } from "@/lib/analyze-client";
 import { compactNumber } from "@/lib/format";
-import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
+import { isCryptoTicker, isValidTicker, normalizeTicker } from "@/lib/data/provider";
+import { tradingViewPerpSymbol } from "@/lib/data/crypto";
 import { periodsFromSpec } from "@/lib/ma";
 import { ALERT_SIGNALS, isMaSignal } from "@/lib/presets";
 import { loadAnalysis, loadSearchDraft, saveAnalysis, saveSearchDraft, type AnalysisPayload } from "@/lib/session";
@@ -18,6 +19,10 @@ import type { FilterSpec } from "@/types";
 const VolumeChart = dynamic(() => import("@/components/VolumeChart"), {
   ssr: false,
   loading: () => <div className="h-[276px] rounded-2xl border border-border bg-surface" />,
+});
+const TradingViewFunding = dynamic(() => import("@/components/TradingViewFunding"), {
+  ssr: false,
+  loading: () => <div className="h-[420px] rounded-2xl border border-border bg-surface" />,
 });
 
 export default function ResultsPage() {
@@ -198,6 +203,11 @@ export default function ResultsPage() {
       <div className="my-4">
         <VolumeChart series={payload.series} matchDates={matchDates} maPeriods={maPeriods} />
       </div>
+      {isCryptoTicker(result.ticker) && tradingViewPerpSymbol(result.ticker) ? (
+        <div className="mb-4">
+          <TradingViewFunding symbol={tradingViewPerpSymbol(result.ticker)!} />
+        </div>
+      ) : null}
 
       <div className="mb-3 flex items-center justify-between rounded-xl border border-border bg-surface px-4 py-3">
         <div>
