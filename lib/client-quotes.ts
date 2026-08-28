@@ -27,7 +27,8 @@ const HOSTS = [
 
 const STOOQ_HOSTS = ["https://stooq.com/q/d/l/", "https://stooq.pl/q/d/l/"];
 
-const YEARS = 5;
+/** 기본 기간. 사이클 분석은 fetchBarsInBrowser(ticker, years)로 더 길게 요청한다. */
+const DEFAULT_YEARS = 5;
 
 type YahooChart = {
   chart?: {
@@ -106,17 +107,20 @@ function toBars(json: YahooChart): Bar[] {
   return bars;
 }
 
-function clipYears(bars: Bar[]): Bar[] {
-  const cutoff = new Date(Date.now() - YEARS * 366 * 24 * 60 * 60 * 1000)
+function clipYears(bars: Bar[], years: number): Bar[] {
+  const cutoff = new Date(Date.now() - years * 366 * 24 * 60 * 60 * 1000)
     .toISOString()
     .slice(0, 10);
   const clipped = bars.filter((b) => b.date >= cutoff);
   return clipped.length >= 60 ? clipped : bars;
 }
 
-async function fetchYahooInBrowser(ticker: string): Promise<{ bars: Bar[] | null; detail: string }> {
+async function fetchYahooInBrowser(
+  ticker: string,
+  years: number,
+): Promise<{ bars: Bar[] | null; detail: string }> {
   const now = Math.floor(Date.now() / 1000);
-  const period1 = now - Math.ceil(YEARS * 366 * 24 * 60 * 60);
+  const period1 = now - Math.ceil(years * 366 * 24 * 60 * 60);
   const query =
     `?period1=${period1}&period2=${now}&interval=1d` +
     `&events=div%2Csplit&includeAdjustedClose=true`;
@@ -151,7 +155,10 @@ async function fetchYahooInBrowser(ticker: string): Promise<{ bars: Bar[] | null
   return { bars: null, detail };
 }
 
-async function fetchStooqInBrowser(ticker: string): Promise<{ bars: Bar[] | null; detail: string }> {
+async function fetchStooqInBrowser(
+  ticker: string,
+  years: number,
+): Promise<{ bars: Bar[] | null; detail: string }> {
   let detail = "";
   for (const symbol of tickerFallbacks(ticker).map(toStooqSymbol)) {
     for (const base of STOOQ_HOSTS) {
@@ -164,7 +171,7 @@ async function fetchStooqInBrowser(ticker: string): Promise<{ bars: Bar[] | null
           continue;
         }
         const text = await res.text();
-        const bars = clipYears(parseStooqCsv(text));
+        const bars = clipYears(parseStooqCsv(text), years);
         if (bars.length >= 60) return { bars, detail };
         detail = bars.length ? `일봉 ${bars.length}개뿐` : "CSV가 아님";
       } catch (e) {
@@ -178,12 +185,15 @@ async function fetchStooqInBrowser(ticker: string): Promise<{ bars: Bar[] | null
 /**
  * 브라우저에서 일봉을 받아온다. Yahoo → Stooq 순. 실패하면 ClientQuoteError.
  * 서버 폴백이 전부 실패했을 때만 호출한다.
+ *
+ * years를 크게 주면 사이클 분석용 장기 일봉을 받는다. 소스가 그만큼 안 주면
+ * 있는 만큼만 온다 (짧다는 사실은 리포트의 기간 표시로 드러난다).
  */
-export async function fetchBarsInBrowser(ticker: string): Promise<Bar[]> {
-  const yahoo = await fetchYahooInBrowser(ticker);
+export async function fetchBarsInBrowser(ticker: string, years = DEFAULT_YEARS): Promise<Bar[]> {
+  const yahoo = await fetchYahooInBrowser(ticker, years);
   if (yahoo.bars) return yahoo.bars;
 
-  const stooq = await fetchStooqInBrowser(ticker);
+  const stooq = await fetchStooqInBrowser(ticker, years);
   if (stooq.bars) return stooq.bars;
 
   throw new ClientQuoteError(

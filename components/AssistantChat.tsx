@@ -1,10 +1,16 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import type { ChartMarker } from "@/components/VolumeChart";
 import type { AnalysisPayload } from "@/lib/session";
 
-type Msg = { role: "user" | "assistant"; text: string };
+type Msg = {
+  role: "user" | "assistant";
+  text: string;
+  /** 상승장 분석 답변이면 그 탭으로 가는 링크를 같이 보여준다. */
+  cycleTicker?: string;
+};
 
 type Props = {
   ticker: string;
@@ -14,6 +20,7 @@ type Props = {
 };
 
 const EXAMPLES = [
+  "상승장 올때 공통으로 뜬 지표 찾아줘",
   "10일만에 10%이상 급등 20일전 거래량 분석해줘",
   "200일 이평선 돌파 30일 후 어떻게됐어?",
   "차트에 표시해줘",
@@ -26,7 +33,7 @@ export default function AssistantChat({ ticker, onApplied, onClearMarkers, onOve
   const [messages, setMessages] = useState<Msg[]>([
     {
       role: "assistant",
-      text: "급등 전 거래량이나 이평선 돌파 이후를 물어보면 숫자로 계산해서 차트에 표시합니다. 예: 오라클 10일만에 10%이상 급등 20일전 거래량들 전부 분석해줘",
+      text: "급등 전 거래량, 이평선 돌파 이후, 과거 상승장 시작 때 공통으로 뜬 지표를 숫자로 계산해서 알려줍니다. 예: 비트코인 상승장 올때 어떤 지표들이 공통으로 신호 줬어?",
     },
   ]);
   const [lastMarkers, setLastMarkers] = useState<ChartMarker[]>([]);
@@ -49,6 +56,7 @@ export default function AssistantChat({ ticker, onApplied, onClearMarkers, onOve
         error?: string;
         reply?: string;
         action?: string;
+        ticker?: string;
         markers?: ChartMarker[];
         result?: AnalysisPayload["result"];
         series?: AnalysisPayload["series"];
@@ -57,7 +65,16 @@ export default function AssistantChat({ ticker, onApplied, onClearMarkers, onOve
       };
       if (!res.ok || !data.reply) throw new Error(data.error ?? "비서가 응답하지 못했습니다.");
 
-      setMessages((m) => [...m, { role: "assistant", text: data.reply! }]);
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          text: data.reply!,
+          ...(data.action === "cycle" ? { cycleTicker: data.ticker } : {}),
+        },
+      ]);
+
+      if (data.action === "cycle") return;
 
       if (data.action === "clear") {
         onClearMarkers?.();
@@ -95,14 +112,22 @@ export default function AssistantChat({ ticker, onApplied, onClearMarkers, onOve
 
       <div className="mt-3 max-h-64 space-y-2 overflow-y-auto">
         {messages.map((m, i) => (
-          <p
+          <div
             key={`${m.role}-${i}`}
             className={`rounded-xl px-3 py-2 text-sm leading-relaxed ${
               m.role === "user" ? "bg-blue-500/15" : "bg-bg text-muted"
             }`}
           >
-            {m.text}
-          </p>
+            <p>{m.text}</p>
+            {m.cycleTicker ? (
+              <Link
+                href={`/cycle?ticker=${encodeURIComponent(m.cycleTicker)}`}
+                className="mt-2 inline-block rounded-lg border border-blue-500/50 bg-blue-500/10 px-2.5 py-1.5 text-[11px] font-medium text-blue-300"
+              >
+                🔺 상승장 지표 탭에서 지표별로 보기
+              </Link>
+            ) : null}
+          </div>
         ))}
       </div>
 

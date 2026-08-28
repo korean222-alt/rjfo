@@ -127,3 +127,33 @@ export function loadOverlayPeriods(): number[] {
     return [];
   }
 }
+
+// ── 상승장 지표 탭 ──────────────────────────────────────────────────
+// 리포트는 지표 30개 × 사이클별 상세라 payload가 작지 않다. 탭을 오갈 때
+// 매번 20년치를 다시 받지 않도록 sessionStorage에 들고 있는다 (일봉 자체는 넣지 않는다).
+const CYCLE_KEY = "volume-analyzer:cycle";
+
+export function saveCycle(payload: unknown): void {
+  try {
+    sessionStorage.setItem(CYCLE_KEY, JSON.stringify(payload));
+  } catch {
+    // 용량 초과 등은 무시 — 없으면 다시 분석할 뿐이다.
+  }
+}
+
+export function loadCycle<T>(): T | null {
+  try {
+    const raw = sessionStorage.getItem(CYCLE_KEY);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearCycle(): void {
+  try {
+    sessionStorage.removeItem(CYCLE_KEY);
+  } catch {
+    // ignore
+  }
+}

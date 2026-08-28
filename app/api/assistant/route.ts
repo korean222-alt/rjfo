@@ -1,17 +1,20 @@
 import { json } from "@/lib/json-response";
-import { loadBars } from "@/lib/data";
+import { MAX_YEARS, loadBars } from "@/lib/data";
 import { attachFunding } from "@/lib/data/funding";
 import { DataProviderError, isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import { parseAssistantIntent } from "@/lib/assistant-intent";
 import { generateText, GeminiError } from "@/lib/gemini";
 import { enrich } from "@/lib/indicators";
+import { analyzeCycle, factsForLlm } from "@/lib/cycle";
+import { narrate } from "@/lib/cycle/narrative";
 import { scanMaBreakout, scanSurgePrelude, type ChartMarker } from "@/lib/scan";
 import { analyzeAtDates } from "@/lib/stats";
 import type { AnalysisResult, EnrichedBar, FilterSpec } from "@/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+// 사이클 질문은 20년치 일봉을 받아야 해서 30초로는 모자랄 수 있다.
+export const maxDuration = 60;
 
 const SYSTEM = `너는 한국 주식·코인 차트 비서다.
 주어진 FACTS의 숫자와 날짜만 사용한다. 없는 값을 만들지 마라.
@@ -122,11 +125,32 @@ export async function POST(req: Request) {
   }
 
   const intentTicker =
-    intent.kind === "surge_prelude" || intent.kind === "ma_breakout" ? intent.ticker : undefined;
+    intent.kind === "surge_prelude" || intent.kind === "ma_breakout" || intent.kind === "cycle"
+      ? intent.ticker
+      : undefined;
   const rawTicker = intentTicker || (typeof body.ticker === "string" ? body.ticker : "");
   const ticker = normalizeTicker(rawTicker);
   if (!ticker) return json({ error: "티커를 먼저 입력해 주세요. 예: BTC, ORCL" }, { status: 400 });
   if (!isValidTicker(ticker)) return json({ error: `'${ticker}'는 올바른 티커가 아닙니다.` }, { status: 400 });
+
+  if (intent.kind === "cycle") {
+    // 사이클 분석은 20년치가 필요하다. 아래 공통 로드(5년)로는 사이클이 한두 개밖에 안 잡힌다.
+    try {
+      const raw = await attachFunding(ticker, await loadBars(ticker, { years: MAX_YEARS }));
+      if (raw.length < 300) {
+        return json(
+          { error: `'${ticker}' 일봉이 ${raw.length}개뿐이라 사이클 분석을 못 합니다.` },
+          { status: 422 },
+        );
+      }
+      const report = analyzeCycle(ticker, enrich(raw));
+      const reply = (await polish(factsForLlm(report), message)) ?? narrate(report);
+      return json({ reply, ticker, action: "cycle", markers: [] as ChartMarker[] });
+    } catch (e) {
+      if (e instanceof DataProviderError) return json({ error: e.message }, { status: e.status });
+      return json({ error: `시세를 가져오지 못했습니다: ${(e as Error).message}` }, { status: 502 });
+    }
+  }
 
   let bars: EnrichedBar[];
   try {

@@ -16,6 +16,7 @@ export type AssistantIntent =
       holdDays: number;
       direction: "up" | "down";
     }
+  | { kind: "cycle"; ticker?: string }
   | { kind: "draw_ma"; ticker?: string; period: number }
   | { kind: "mark" }
   | { kind: "clear" }
@@ -75,6 +76,12 @@ export function parseAssistantIntent(message: string): AssistantIntent {
   const ticker = pickTicker(s);
 
   if (/표시\s*끄|지워|마커\s*삭제|신호\s*지우/.test(s)) return { kind: "clear" };
+
+  // 상승장/사이클 질문은 돌파·급등 검사보다 먼저 잡는다.
+  // "365일선 돌파하면 상승장이 왔었어?"는 돌파 스캔이 아니라 사이클 분석이 답이다.
+  if (/상승장|불장|강세장|대세\s*상승|사이클|하락장\s*(끝|종료|마무리)|바닥\s*(확인|잡)|추세\s*전환/.test(s)) {
+    return { kind: "cycle", ticker };
+  }
 
   const surge = s.match(/(\d+)\s*일(?:만)?에\s*(\d+(?:\.\d+)?)\s*%\s*이상\s*(?:급등|상승)/);
   const looseSurge = /급등|급상승|대상승/.test(s) && /거래량/.test(s);

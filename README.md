@@ -27,8 +27,13 @@
 **숫자는 100% TypeScript 코드가 계산한다.** LLM은 자연어를 JSON 스펙으로 바꾸는 일만 한다.
 빠른 신호(칩)를 고르면 LLM을 아예 거치지 않고 정해진 조건이 그대로 쓰인다.
 
-여기에 더해, 등록해 둔 종목에 신호가 뜨면 **텔레그램으로 알림**을 보낸다
-([텔레그램 알림](#텔레그램-알림) 참고).
+화면은 탭 셋으로 나뉜다.
+
+| 탭 | 하는 일 |
+|---|---|
+| 📊 거래량 분석 | 자연어 조건 → 걸린 날의 이후 성과를 base rate와 비교 |
+| 🔺 상승장 지표 | 과거 상승장 시작점을 찾아내고, 그때 공통으로 뜬 지표를 채점 ([자세히](#상승장-지표-탭)) |
+| 🔔 알림 | 등록한 종목에 신호가 뜨면 **텔레그램으로 알림** ([자세히](#텔레그램-알림)) |
 
 ## 로컬 실행
 
@@ -50,6 +55,8 @@ DATA_PROVIDER=fixture npm run dev   # 합성 데이터 (실제 시세 아님)
 npm run selftest        # 지표·통계 검산 (네트워크 불필요)
 npm run test:gemini     # Gemini 폴백 체인 검증 (fetch를 가짜로 갈아끼움)
 npm run test:data       # 시세 소스 폴백 체인 검증 (fetch를 가짜로 갈아끼움)
+npm run test:cycle      # 상승장 라벨링·지표·평가 검산 (네트워크 불필요)
+npm run test:cycle BTC-USD   # 실데이터로 상승장 리포트 콘솔 출력
 npm run verify AAPL     # 실데이터로 지표/통계 콘솔 출력
 DATA_PROVIDER=fixture npm run verify DEMO
 ```
@@ -223,8 +230,10 @@ https://<배포주소>/api/diag?ticker=NVDA
 app/
   page.tsx                  메인 (티커 + 명령 입력)
   results/page.tsx          결과 화면
+  cycle/page.tsx            상승장 지표 탭
   alerts/page.tsx           텔레그램 알림 등록·삭제
   api/parse/route.ts        자연어 → FilterSpec
+  api/cycle/route.ts        상승장 사이클 라벨링 + 지표 배터리 채점
   api/analyze/route.ts      데이터 로드 + 지표 + 필터 + 통계 (일봉을 직접 받기도 함)
   api/diag/route.ts         시세 소스 진단 (?ticker=NVDA)
   api/alerts/route.ts       알림 목록 조회/등록/삭제
@@ -237,6 +246,13 @@ lib/
   alerts/telegram.ts        텔레그램 Bot API
   alerts/evaluate.ts        마지막 봉 신호 판정 + 메시지 문안
   analyze-client.ts         분석 요청 + 브라우저 폴백 조율
+  cycle-client.ts           상승장 분석 요청 + 브라우저 폴백 (20년치)
+  cycle/regime.ts           지그재그로 '상승장 시작' 라벨링
+  cycle/ta.ts               RSI/MACD/볼린저/ADX/스토캐스틱/CCI/일목
+  cycle/resample.ts         주봉·월봉 변환 (미래 참조 방지)
+  cycle/signals.ts          지표 배터리 (29개, 상태 기반)
+  cycle/evaluate.ts         적중률·리드타임·우연대비·기저율 비교
+  cycle/narrative.ts        리포트 → 한국어 문장 (Gemini 없이도 동작)
   client-quotes.ts          브라우저에서 Yahoo 직접 호출
   validate-bars.ts          클라이언트가 보낸 일봉 검증
   data/provider.ts          데이터 소스 인터페이스
@@ -251,8 +267,9 @@ lib/
   presets.ts                프리셋 정의
   gemini.ts                 Gemini 호출 + 모델 폴백 체인 + 시간 예산
   validate-spec.ts          LLM 출력 검증 (알려진 값만 통과)
-components/                 TickerInput, CommandInput, SummaryCard, VolumeChart, MatchList
-scripts/                    selftest.ts, verify.ts, gemini-test.ts
+components/                 TickerInput, CommandInput, SummaryCard, VolumeChart, MatchList,
+                            NavTabs, CycleChart, CycleSignalTable
+scripts/                    selftest.ts, verify.ts, gemini-test.ts, cycle-test.ts
 vercel.json                 프레임워크 고정 + 알림 크론 스케줄
 ```
 
@@ -299,6 +316,61 @@ vercel.json                 프레임워크 고정 + 알림 크론 스케줄
 칩에 없는 조건은 명령창에 직접 쓰면 된다. 그때만 Gemini가 문장을 조건으로 바꾼다.
 
 최근에 입력한 **티커와 명령은 브라우저에 저장**되며, 결과 화면 최상단의 **티커·명령 수정**에서 같은 티커로 조건만 바꾸거나 티커 자체를 바꿔 즉시 재분석할 수 있다. 분석 결과에는 TradingView Lightweight Charts 기반의 **캔들 차트와 거래량 패널**이 표시되고, 현재 조건에 매칭된 날짜는 파란 화살표로 확인할 수 있다.
+
+## 상승장 지표 탭
+
+`/cycle`. 티커 하나를 넣으면 그 종목의 **과거 상승장 시작점을 기계가 찾아내고**, 그때마다 어떤
+지표들이 공통으로 신호를 줬는지 전부 채점한다.
+
+```
+[티커]
+   ↓
+[1] 상승장 시작 라벨링 (lib/cycle/regime.ts)
+    종가 지그재그. 고점 대비 -X% 빠진 뒤 저점 대비 +Y% 오른 그 저점 = 상승장 시작.
+    기본값은 코인 -40%/+50%, 주식 -20%/+25%. 화면에서 조절 가능.
+   ↓
+[2] 지표 배터리 (lib/cycle/signals.ts) — 29개
+    이동평균(50/120/200/365일, 20/60·50/200 골든크로스, 200일선 기울기),
+    주봉 30주선·200주선·12개월선, MACD(일/주/월), RSI(일/주/과매도탈출),
+    스토캐스틱, CCI, 볼린저(중심선·스퀴즈 돌파), ADX+DI, 일목 구름,
+    OBV, 상승거래량 우위, 거래량 급증, 52주 신고가, 저점+20%, 고점·저점 동시 상승
+   ↓
+[3] 채점 (lib/cycle/evaluate.ts)
+   ↓
+[결과] 요약 + 현재 켜진 지표 + 사이클 목록 + 차트 + 지표 성적표
+```
+
+### 지표마다 재는 것
+
+| 항목 | 뜻 |
+|---|---|
+| 적중률 | 과거 상승장 시작 N번 중 몇 번을 잡았나 |
+| 리드타임 | 실제 바닥보다 며칠 빨랐나/늦었나 (양수 = 늦게) |
+| 남은 상승 | 신호 시점에 그 사이클 상승분의 몇 %가 아직 남아 있었나 |
+| 정확도 | 전체 신호 중 상승장 시작 부근이었던 비율 |
+| **우연대비(lift)** | 정확도 ÷ (전체 기간 중 '상승장 시작 부근'의 비율) |
+| 기저율 대비 | 신호 후 1년 수익률 − 아무 날이나 골랐을 때의 1년 수익률 |
+
+**우연대비가 이 화면의 핵심이다.** 하루 걸러 켜지는 지표는 사이클을 전부 '적중'하지만
+아무것도 발견한 게 아니다. 그래서 순위는 적중률만이 아니라 우연대비를 같이 본다
+(1.0이면 아무 날이나 찍은 것과 같고, 1.0 미만이면 오히려 상승장 시작을 덜 가리킨다).
+
+### 설계상 지키는 것
+
+- **파라미터를 탐색하지 않는다.** 365일선이 아니라 347일선이 제일 좋았다는 결과는 발견이
+  아니라 과최적화다. 전부 관례적인 라운드 넘버로 고정한다.
+- **주봉·월봉은 마감된 기간만 쓴다.** 주봉 MACD 골든크로스는 그 주가 끝나야 알 수 있다.
+  진행 중인 주의 값을 일봉에 붙이면 백테스트가 통째로 부풀려진다 (`lib/cycle/resample.ts`).
+- **데이터 시작점을 바닥으로 세지 않는다.** 앞에 하락이 관측되지 않은 저점은 경계일 뿐이다.
+- **표본 수를 숨기지 않는다.** 사이클은 5년에 한두 번이라 n=3~4가 보통이다. 화면 하단에
+  신뢰도와 다중검정 경고를 항상 띄운다.
+
+### AI 비서
+
+"상승장", "불장", "사이클", "추세 전환" 같은 말이 들어간 질문은 AI 비서가 이 분석으로
+넘긴다 (`lib/assistant-intent.ts`). 답변에 이 탭으로 가는 링크가 같이 붙는다.
+Gemini는 계산 결과를 문장으로 옮기는 일만 하고, 죽어도 `lib/cycle/narrative.ts`의
+템플릿 문장이 대신 나온다.
 
 ## 텔레그램 알림
 

@@ -27,13 +27,17 @@ export function __clearMemoryCache(): void {
 }
 
 /** 테스트용 — 저장 시각을 앞당겨 stale 상태를 만든다. */
-export function __setSavedAtForTest(ticker: string, savedAt: number): void {
-  const env = memory.get(keyFor(ticker));
+export function __setSavedAtForTest(ticker: string, savedAt: number, years?: number): void {
+  const env = memory.get(keyFor(ticker, years));
   if (env) env.savedAt = savedAt;
 }
 
-function keyFor(ticker: string): string {
-  return `ohlcv:${ticker}`;
+/**
+ * 기간이 다르면 다른 캐시다. 5년치 캐시를 20년 요청에 돌려주면
+ * 사이클 분석이 조용히 짧은 데이터로 돌아간다.
+ */
+function keyFor(ticker: string, years?: number): string {
+  return years == null ? `ohlcv:${ticker}` : `ohlcv:${ticker}:${years}y`;
 }
 
 function toHit(env: Envelope | null): CacheHit | null {
@@ -56,8 +60,8 @@ function parseStored(raw: string): Envelope | null {
   }
 }
 
-export async function getCachedBars(ticker: string): Promise<CacheHit | null> {
-  const key = keyFor(ticker);
+export async function getCachedBars(ticker: string, years?: number): Promise<CacheHit | null> {
+  const key = keyFor(ticker, years);
 
   // KV 장애는 치명적이지 않다 (kvGet이 null을 준다). 메모리 캐시로 폴백.
   const raw = await kvGet(key);
@@ -71,8 +75,8 @@ export async function getCachedBars(ticker: string): Promise<CacheHit | null> {
   return hit;
 }
 
-export async function setCachedBars(ticker: string, bars: Bar[]): Promise<void> {
-  const key = keyFor(ticker);
+export async function setCachedBars(ticker: string, bars: Bar[], years?: number): Promise<void> {
+  const key = keyFor(ticker, years);
   const env: Envelope = { v: 1, savedAt: Date.now(), bars };
   memory.set(key, env);
 
