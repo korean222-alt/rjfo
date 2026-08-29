@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import CommandInput from "@/components/CommandInput";
 import MatchList from "@/components/MatchList";
 import SummaryCard from "@/components/SummaryCard";
-import TabNav from "@/components/TabNav";
 import TickerInput from "@/components/TickerInput";
 import AssistantChat from "@/components/AssistantChat";
 import ChartMaPanel from "@/components/ChartMaPanel";
@@ -30,7 +29,7 @@ import {
 import type { ChartMarker } from "@/components/VolumeChart";
 import type { FilterSpec } from "@/types";
 
-const ChartPanel = dynamic(() => import("@/components/ChartPanel"), {
+const VolumeChart = dynamic(() => import("@/components/VolumeChart"), {
   ssr: false,
   loading: () => <div className="h-[276px] rounded-2xl border border-border bg-surface" />,
 });
@@ -177,7 +176,6 @@ export default function ResultsPage() {
 
   return (
     <main className="mx-auto max-w-lg px-4 py-6 pb-28">
-      <TabNav />
       <div className="mb-4 flex items-center justify-between gap-2">
         <Link href="/" className="text-sm text-muted">← 첫 화면</Link>
         <div className="flex gap-2">
@@ -234,13 +232,7 @@ export default function ResultsPage() {
         <ChartMaPanel periods={overlayPeriods} onChange={setOverlays} />
       </div>
       <div className="my-4">
-        <ChartPanel
-          ticker={result.ticker}
-          series={payload.series}
-          matchDates={matchDates}
-          maPeriods={maPeriods}
-          extraMarkers={aiMarkers}
-        />
+        <VolumeChart series={payload.series} matchDates={matchDates} maPeriods={maPeriods} extraMarkers={aiMarkers} />
       </div>
       <div className="mb-4">
         <AssistantChat

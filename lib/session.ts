@@ -106,31 +106,6 @@ export function clearAiMarkers(): void {
   }
 }
 
-// ── 상승장 지표 탭 ─────────────────────────────────────────────
-const BULL_KEY = "volume-analyzer:bull-draft";
-
-export type BullDraft = { ticker: string; timeframe: string };
-
-export function saveBullDraft(draft: BullDraft): void {
-  try {
-    localStorage.setItem(BULL_KEY, JSON.stringify(draft));
-  } catch {
-    // 저장이 막혀도 화면은 그대로 동작한다.
-  }
-}
-
-export function loadBullDraft(): BullDraft | null {
-  try {
-    const raw = localStorage.getItem(BULL_KEY);
-    if (!raw) return null;
-    const draft = JSON.parse(raw) as Partial<BullDraft>;
-    if (typeof draft.ticker !== "string" || typeof draft.timeframe !== "string") return null;
-    return { ticker: draft.ticker, timeframe: draft.timeframe };
-  } catch {
-    return null;
-  }
-}
-
 const OVERLAY_KEY = "volume-analyzer:overlay-ma";
 
 export function saveOverlayPeriods(periods: number[]): void {

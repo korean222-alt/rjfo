@@ -24,13 +24,6 @@ export const TIMEFRAME_UNIT: Record<Timeframe, string> = {
   "1M": "개월",
 };
 
-/** TradingView 위젯 interval 코드. */
-export const TIMEFRAME_INTERVAL: Record<Timeframe, string> = {
-  "1d": "D",
-  "1w": "W",
-  "1M": "M",
-};
-
 export function isTimeframe(v: unknown): v is Timeframe {
   return typeof v === "string" && (TIMEFRAMES as readonly string[]).includes(v);
 }
@@ -113,11 +106,4 @@ export function aggregateBars(bars: Bar[], tf: Timeframe): PeriodBar[] {
 
   if (cur) out.push(cur);
   return out;
-}
-
-/** 화면에 보여줄 봉 이름. 주봉은 시작일, 월봉은 연-월. */
-export function periodLabel(bar: PeriodBar, tf: Timeframe): string {
-  if (tf === "1M") return bar.date.slice(0, 7);
-  if (tf === "1w") return `${bar.date} 주`;
-  return bar.date;
 }

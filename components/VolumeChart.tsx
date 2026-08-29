@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ColorType,
   LineStyle,
@@ -10,6 +10,15 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { smaLine } from "@/lib/ma";
+import {
+  TIMEFRAMES,
+  TIMEFRAME_LABEL,
+  TIMEFRAME_UNIT,
+  aggregateBars,
+  bucketStart,
+  type Timeframe,
+} from "@/lib/timeframe";
+import type { Bar } from "@/types";
 
 export type SeriesPoint = {
   date: string;
@@ -34,24 +43,57 @@ type Props = {
   series: SeriesPoint[];
   matchDates: string[];
   maPeriods?: number[];
-  /** 이평선 기간의 단위. 주봉·월봉으로 보면 "일"이 아니다. */
-  maUnit?: string;
   extraMarkers?: ChartMarker[];
 };
 
-export default function VolumeChart({
-  series,
-  matchDates,
-  maPeriods = [],
-  maUnit = "일",
-  extraMarkers = [],
-}: Props) {
+export default function VolumeChart({ series, matchDates, maPeriods = [], extraMarkers = [] }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const hasFunding = series.some((p) => p.funding != null && Number.isFinite(p.funding));
+  const [timeframe, setTimeframe] = useState<Timeframe>("1d");
+
+  // 주봉·월봉은 받아온 일봉을 묶어서 만든다 (시세 소스가 일봉만 주기 때문).
+  const view = useMemo(() => {
+    if (timeframe === "1d") return series;
+    const bars: Bar[] = series.map((p) => ({
+      date: p.date,
+      open: p.open ?? p.close,
+      high: p.high ?? p.close,
+      low: p.low ?? p.close,
+      close: p.close,
+      volume: p.volume,
+      funding: p.funding ?? null,
+    }));
+    return aggregateBars(bars, timeframe).map<SeriesPoint>((b) => ({
+      date: b.date,
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+      volume: b.volume,
+      funding: b.funding ?? null,
+    }));
+  }, [series, timeframe]);
+
+  // 매칭일은 일봉 날짜다. 주봉·월봉에서는 그 날이 속한 봉에 화살표를 찍는다.
+  const viewMatchDates = useMemo(
+    () => (timeframe === "1d" ? matchDates : matchDates.map((d) => bucketStart(d, timeframe))),
+    [matchDates, timeframe],
+  );
+  const viewMarkers = useMemo(
+    () =>
+      timeframe === "1d"
+        ? extraMarkers
+        : extraMarkers.map((m) => ({ ...m, date: bucketStart(m.date, timeframe) })),
+    [extraMarkers, timeframe],
+  );
+
+  const hasFunding = view.some((p) => p.funding != null && Number.isFinite(p.funding));
 
   useEffect(() => {
     const el = containerRef.current;
+    const series = view;
+    const matchDates = viewMatchDates;
+    const extraMarkers = viewMarkers;
     if (!el || !series.length) return;
 
     const height = hasFunding ? 460 : 360;
@@ -182,7 +224,7 @@ export default function VolumeChart({
       chart.remove();
       chartRef.current = null;
     };
-  }, [series, matchDates, maPeriods, extraMarkers, hasFunding]);
+  }, [view, viewMatchDates, maPeriods, viewMarkers, hasFunding]);
 
   return (
     <section className="rounded-2xl border border-border bg-surface p-3">
@@ -192,7 +234,9 @@ export default function VolumeChart({
           <p className="mt-1 text-xs text-muted leading-relaxed">
             화살표는 조건에 걸린 날입니다.
             {hasFunding ? " 맨 아래 주황/청록 막대가 일평균 펀딩비(%)입니다." : ""}
-            {maPeriods.length ? ` 선은 이평선(${maPeriods.join(", ")}${maUnit})입니다.` : ""}
+            {maPeriods.length
+              ? ` 선은 이평선(${maPeriods.join(", ")}${TIMEFRAME_UNIT[timeframe]})입니다.`
+              : ""}
           </p>
         </div>
         <a
@@ -204,7 +248,38 @@ export default function VolumeChart({
           Charting by TradingView
         </a>
       </div>
+      <div
+        className="mb-3 flex gap-1 rounded-xl border border-border bg-bg p-1"
+        role="tablist"
+        aria-label="봉 선택"
+      >
+        {TIMEFRAMES.map((tf) => {
+          const on = tf === timeframe;
+          return (
+            <button
+              key={tf}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              onClick={() => setTimeframe(tf)}
+              className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
+                on ? "bg-blue-500/20 text-white" : "text-muted"
+              }`}
+            >
+              {TIMEFRAME_LABEL[tf]}
+            </button>
+          );
+        })}
+      </div>
+
       <div ref={containerRef} className="w-full" />
+
+      {timeframe === "1d" ? null : (
+        <p className="mt-3 text-xs leading-relaxed text-muted">
+          분석·통계는 일봉 기준입니다. {TIMEFRAME_LABEL[timeframe]}은 같은 일봉을 묶어 보여 주는
+          것이고, 화살표는 그 날이 속한 봉에 찍힙니다.
+        </p>
+      )}
     </section>
   );
 }
