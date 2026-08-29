@@ -17,6 +17,28 @@ export type PeriodBars = {
   periodOf: number[];
 };
 
+/** 차트에서 고르는 봉. 채점(analyzeCycle)은 항상 일봉이고, 이 값은 보기만 바꾼다. */
+export const CHART_TFS = ["1d", "1w", "1M"] as const;
+export type ChartTf = (typeof CHART_TFS)[number];
+
+export const CHART_TF_LABEL: Record<ChartTf, string> = {
+  "1d": "일봉",
+  "1w": "주봉",
+  "1M": "월봉",
+};
+
+export const CHART_TF_UNIT: Record<ChartTf, string> = {
+  "1d": "일",
+  "1w": "주",
+  "1M": "개월",
+};
+
+export const CHART_TF_TV: Record<ChartTf, "D" | "W" | "M"> = {
+  "1d": "D",
+  "1w": "W",
+  "1M": "M",
+};
+
 function isoWeekKey(date: string): string {
   const d = new Date(`${date}T00:00:00Z`);
   // ISO 주: 목요일이 속한 해가 그 주의 해다.
@@ -65,6 +87,34 @@ export function toWeekly(bars: Bar[]): PeriodBars {
 
 export function toMonthly(bars: Bar[]): PeriodBars {
   return aggregate(bars, monthKey);
+}
+
+/** 차트에 그릴 봉. 일봉은 그대로, 주/월은 묶는다. */
+export function barsForView(bars: Bar[], tf: ChartTf): Bar[] {
+  if (tf === "1d") return bars;
+  return (tf === "1w" ? toWeekly(bars) : toMonthly(bars)).bars;
+}
+
+/**
+ * 일봉 날짜(사이클 바닥, 신호일)를 지금 보고 있는 봉의 날짜로 붙인다.
+ * 주봉/월봉 차트는 봉 날짜가 '그 기간의 마지막 거래일'이라, 일봉 날짜를 그대로
+ * 넘기면 마커가 안 찍힌다.
+ */
+export function snapDatesToView(dates: string[], daily: Bar[], tf: ChartTf): string[] {
+  if (tf === "1d" || !dates.length || !daily.length) return dates;
+  const { bars, periodOf } = tf === "1w" ? toWeekly(daily) : toMonthly(daily);
+  const idx = new Map(daily.map((b, i) => [b.date, i]));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const d of dates) {
+    const i = idx.get(d);
+    if (i == null) continue;
+    const date = bars[periodOf[i]]?.date;
+    if (!date || seen.has(date)) continue;
+    seen.add(date);
+    out.push(date);
+  }
+  return out;
 }
 
 /**

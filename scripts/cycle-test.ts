@@ -10,11 +10,12 @@ import { enrich } from "../lib/indicators";
 import { analyzeCycle } from "../lib/cycle";
 import { findCycles, findPivots } from "../lib/cycle/regime";
 import { eventIndices } from "../lib/cycle/evaluate";
-import { toMonthly, toWeekly, projectToDaily } from "../lib/cycle/resample";
+import { toMonthly, toWeekly, projectToDaily, barsForView, snapDatesToView } from "../lib/cycle/resample";
 import { ema, macd, rsi, sma } from "../lib/cycle/ta";
 import { narrate } from "../lib/cycle/narrative";
-import { plotForSignal } from "../lib/cycle/plot";
+import { plotForSignal, plotForView } from "../lib/cycle/plot";
 import { buildSignals } from "../lib/cycle/signals";
+import { toTradingViewSymbol } from "../lib/tradingview";
 import type { Bar } from "../types";
 
 let failures = 0;
@@ -288,10 +289,83 @@ console.log("\n[7] 지표별 차트 그림");
   console.log(`  ✓ 지표 ${signals.length}개 전부 그림 있음`);
 }
 
-// ── 8. 실데이터 (인자로 티커를 주면) ──────────────────────────────
+// ── 8. 차트 보기용 봉 (채점은 일봉, 차트만 주/월) ─────────────────
+console.log("\n[8] 차트 보기: 일/주/월 + BTC 현물 심볼");
+{
+  assert(toTradingViewSymbol("BTC-USD") === "CRYPTO:BTCUSD", "BTC는 CRYPTO:BTCUSD 현물");
+  assert(toTradingViewSymbol("BTC-USD") !== "BINANCE:BTCUSDT.P", "BTC는 선물이 아님");
+  assert(toTradingViewSymbol("ETH-USD") === "CRYPTO:ETHUSD", "ETH도 CRYPTO 현물");
+  assert(toTradingViewSymbol("005930.KS") === "KRX:005930", "삼성전자는 KRX");
+
+  const bars = barsFromCloses(Array.from({ length: 400 }, (_, i) => 100 + i));
+  assert(barsForView(bars, "1d") === bars, "일봉 보기는 원본 배열을 그대로 쓴다");
+  const weekly = barsForView(bars, "1w");
+  const monthly = barsForView(bars, "1M");
+  assert(weekly.length < bars.length / 4, `주봉은 일봉보다 적다 (${weekly.length}/${bars.length})`);
+  assert(monthly.length <= weekly.length, `월봉은 주봉보다 많지 않다 (${monthly.length}/${weekly.length})`);
+  assert(weekly[0].open === bars[0].open, "주봉 시가 = 그 주 첫 일봉 시가");
+  assert(weekly[0].date === toWeekly(bars).bars[0].date, "barsForView 주봉 날짜 = toWeekly");
+
+  // 같은 주에 속한 두 날짜는 주봉 하나에만 찍힌다.
+  const sameWeek = snapDatesToView([bars[0].date, bars[1].date], bars, "1w");
+  assert(sameWeek.length === 1, `같은 주의 두 날짜는 마커 하나 (실제 ${sameWeek.length})`);
+  assert(sameWeek[0] === weekly[toWeekly(bars).periodOf[0]].date, "스냅된 날짜는 그 주 마지막 거래일");
+  assert(
+    JSON.stringify(snapDatesToView([bars[0].date], bars, "1d")) === JSON.stringify([bars[0].date]),
+    "일봉 보기에서는 날짜를 그대로 둔다",
+  );
+
+  const closes: number[] = [100];
+  for (let i = 1; i < 1600; i++) {
+    closes.push(closes[i - 1] * (1 + 0.0004 + Math.sin(i / 90) * 0.004 + Math.sin(i * 2.3) * 0.006));
+  }
+  const longBars = enrich(barsFromCloses(closes));
+  const wBars = barsForView(longBars, "1w");
+  const mBars = barsForView(longBars, "1M");
+
+  const dailyMa = plotForView("ma200", longBars, "1d");
+  const weeklyMa = plotForView("ma200", longBars, "1w");
+  const monthlyMa = plotForView("ma200", longBars, "1M");
+  assert(dailyMa.overlays[0].label.includes("일"), "일봉 200일선 라벨");
+  assert(weeklyMa.overlays[0].label === "200주선", `주봉 200일선 → 200주선 (실제 ${weeklyMa.overlays[0].label})`);
+  assert(monthlyMa.overlays[0].label === "200개월선", `월봉 200일선 → 200개월선 (실제 ${monthlyMa.overlays[0].label})`);
+  assert(
+    weeklyMa.overlays[0].data.length <= wBars.length,
+    `주봉 그림 점은 주봉 수를 넘지 않는다 (${weeklyMa.overlays[0].data.length}/${wBars.length})`,
+  );
+  assert(
+    monthlyMa.overlays[0].data.length <= mBars.length,
+    `월봉 그림 점은 월봉 수를 넘지 않는다 (${monthlyMa.overlays[0].data.length}/${mBars.length})`,
+  );
+
+  // 주봉 전용 키를 주봉 화면에서 그리면 일봉에 계단으로 펼치지 않는다.
+  const w30daily = plotForSignal("w_ma30", longBars);
+  const w30weekly = plotForView("w_ma30", longBars, "1w");
+  assert(w30weekly.overlays[0].label === "30주선", "주봉 화면의 30주선 라벨");
+  assert(
+    w30weekly.overlays[0].data.length < w30daily.overlays[0].data.length / 3,
+    `주봉 보기 30주선은 주봉 개수 (${w30weekly.overlays[0].data.length} vs 일봉계단 ${w30daily.overlays[0].data.length})`,
+  );
+
+  const m12 = plotForView("m_ma12", longBars, "1M");
+  assert(m12.overlays[0].label === "12개월선", "월봉 화면의 12개월선");
+
+  const macdW = plotForView("macd_w", longBars, "1w");
+  assert(macdW.pane != null, "주봉 MACD는 별도 패널");
+  assert(
+    (macdW.pane?.lines[0].data.length ?? 0) <= wBars.length,
+    "주봉 MACD도 주봉 개수를 넘지 않는다",
+  );
+
+  // 채점은 봉 보기와 무관하게 일봉이다. (회귀: analyzeCycle 인자가 그대로)
+  const report = analyzeCycle("TEST", longBars, { thresholds: { bearPct: 30, bullPct: 30 } });
+  assert(report.totalBars === longBars.length, "채점 봉 수는 일봉 그대로");
+}
+
+// ── 9. 실데이터 (인자로 티커를 주면) ──────────────────────────────
 const ticker = process.argv[2];
 if (ticker) {
-  console.log(`\n[8] 실데이터: ${ticker}`);
+  console.log(`\n[9] 실데이터: ${ticker}`);
   (async () => {
     const { loadBars, MAX_YEARS } = await import("../lib/data");
     const { normalizeTicker } = await import("../lib/data/provider");

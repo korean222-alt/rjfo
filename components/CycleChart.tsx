@@ -15,6 +15,7 @@ import {
 } from "lightweight-charts";
 import type { Bar } from "@/types";
 import type { SignalPlot } from "@/lib/cycle/plot";
+import type { ChartTf } from "@/lib/cycle/resample";
 
 type Props = {
   series: Bar[];
@@ -28,18 +29,22 @@ type Props = {
   matchedSignalDates?: string[];
   /** 지금 보고 있는 지표 하나의 그림. 없으면 캔들만. */
   plot?: SignalPlot | null;
+  /** 보이는 기간 버튼(1년/3년/10년)의 봉 수. 기본 일봉. */
+  tf?: ChartTf;
 };
 
 const BG = "#141a24";
 const GRID = "#232b39";
 
 /** 20년을 다 펼치면 캔들이 서브픽셀이 된다. 빠르게 좁혀 볼 수 있게. */
-const RANGES: { label: string; span: number | null }[] = [
-  { label: "전체", span: null },
-  { label: "10년", span: 2520 },
-  { label: "3년", span: 756 },
-  { label: "1년", span: 252 },
-];
+const RANGE_LABELS = ["전체", "10년", "3년", "1년"] as const;
+type RangeLabel = (typeof RANGE_LABELS)[number];
+
+const RANGE_SPAN: Record<ChartTf, Record<RangeLabel, number | null>> = {
+  "1d": { 전체: null, "10년": 2520, "3년": 756, "1년": 252 },
+  "1w": { 전체: null, "10년": 520, "3년": 156, "1년": 52 },
+  "1M": { 전체: null, "10년": 120, "3년": 36, "1년": 12 },
+};
 
 function baseOptions(width: number, height: number, log: boolean) {
   return {
@@ -78,6 +83,7 @@ export default function CycleChart({
   signalDates = [],
   matchedSignalDates = [],
   plot = null,
+  tf = "1d",
 }: Props) {
   const mainRef = useRef<HTMLDivElement>(null);
   const paneRef = useRef<HTMLDivElement>(null);
@@ -88,8 +94,9 @@ export default function CycleChart({
   const paneChartRef = useRef<IChartApi | null>(null);
 
   const [log, setLog] = useState(true);
-  /** 보여줄 거래일 수. null이면 전체. */
-  const [span, setSpan] = useState<number | null>(null);
+  /** 보여줄 기간 라벨. 봉 수는 tf에 따라 달라진다. */
+  const [rangeLabel, setRangeLabel] = useState<RangeLabel>("전체");
+  const span = RANGE_SPAN[tf][rangeLabel];
 
   const pane = plot?.pane ?? null;
 
@@ -141,7 +148,7 @@ export default function CycleChart({
     }
     const to = series.length - 1;
     chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, to - span), to });
-  }, [span, series, log]);
+  }, [span, series, log, tf]);
 
   // ── 마커 (상승장 시작 / 고점 / 선택한 지표의 신호) ─────────────
   useEffect(() => {
@@ -303,16 +310,16 @@ export default function CycleChart({
           ))}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {RANGES.map((r) => (
+          {RANGE_LABELS.map((label) => (
             <button
-              key={r.label}
+              key={label}
               type="button"
-              onClick={() => setSpan(r.span)}
+              onClick={() => setRangeLabel(label)}
               className={`rounded border px-1.5 py-1 text-[11px] ${
-                span === r.span ? "border-blue-500 bg-blue-500/15 text-white" : "border-border bg-bg text-muted"
+                rangeLabel === label ? "border-blue-500 bg-blue-500/15 text-white" : "border-border bg-bg text-muted"
               }`}
             >
-              {r.label}
+              {label}
             </button>
           ))}
           <button

@@ -2,18 +2,33 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import BtcSpotHeader from "@/components/BtcSpotHeader";
 import CycleSignalTable from "@/components/CycleSignalTable";
 import NavTabs from "@/components/NavTabs";
 import TickerInput from "@/components/TickerInput";
+import TimeframeSelect from "@/components/TimeframeSelect";
 import { SIGNAL_GROUPS } from "@/lib/cycle";
-import { enrichForPlot, plotForSignal } from "@/lib/cycle/plot";
+import { enrichForPlot, plotForView } from "@/lib/cycle/plot";
+import {
+  barsForView,
+  CHART_TF_LABEL,
+  CHART_TF_TV,
+  snapDatesToView,
+  type ChartTf,
+} from "@/lib/cycle/resample";
 import { runCycle, type CyclePayload } from "@/lib/cycle-client";
-import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
+import { isCryptoTicker, isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import { clearCycle, loadCycle, saveCycle } from "@/lib/session";
+import { toTradingViewSymbol } from "@/lib/tradingview";
 
 const CycleChart = dynamic(() => import("@/components/CycleChart"), {
   ssr: false,
   loading: () => <div className="h-[320px] rounded-2xl border border-border bg-surface" />,
+});
+
+const TradingViewChart = dynamic(() => import("@/components/TradingViewChart"), {
+  ssr: false,
+  loading: () => <div className="h-[360px] rounded-2xl border border-border bg-surface" />,
 });
 
 const EXAMPLES = ["BTC", "ETH", "IONQ", "NVDA", "005930"];
@@ -34,6 +49,7 @@ export default function CyclePage() {
   const [bearPct, setBearPct] = useState<number | null>(null);
   const [bullPct, setBullPct] = useState<number | null>(null);
   const [question, setQuestion] = useState("");
+  const [tf, setTf] = useState<ChartTf>("1d");
   const chartRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -105,8 +121,13 @@ export default function CyclePage() {
   );
 
   const plot = useMemo(
-    () => (enrichedBars && selectedKey ? plotForSignal(selectedKey, enrichedBars) : null),
-    [enrichedBars, selectedKey],
+    () => (enrichedBars && selectedKey ? plotForView(selectedKey, enrichedBars, tf) : null),
+    [enrichedBars, selectedKey, tf],
+  );
+
+  const viewSeries = useMemo(
+    () => (payload?.series?.length ? barsForView(payload.series, tf) : []),
+    [payload?.series, tf],
   );
 
   /** 성적표 순위(= 종합 순) 그대로 앞뒤로 넘긴다. */
@@ -141,6 +162,40 @@ export default function CyclePage() {
     return selectedSignal.events.length <= MAX_MARKERS ? selectedSignal.events : matchedDates;
   }, [selectedSignal, matchedDates]);
   const markersTrimmed = Boolean(selectedSignal && selectedSignal.events.length > MAX_MARKERS);
+
+  const dailyBars = payload?.series ?? [];
+  const troughDates = useMemo(
+    () =>
+      report
+        ? snapDatesToView(
+            report.cycles.map((c) => c.troughDate),
+            dailyBars,
+            tf,
+          )
+        : [],
+    [report, dailyBars, tf],
+  );
+  const peakDates = useMemo(
+    () =>
+      report
+        ? snapDatesToView(
+            report.cycles.map((c) => c.nextPeakDate).filter((d): d is string => d != null),
+            dailyBars,
+            tf,
+          )
+        : [],
+    [report, dailyBars, tf],
+  );
+  const snappedMarkers = useMemo(
+    () => snapDatesToView(markerDates, dailyBars, tf),
+    [markerDates, dailyBars, tf],
+  );
+  const snappedMatched = useMemo(
+    () => snapDatesToView(matchedDates, dailyBars, tf),
+    [matchedDates, dailyBars, tf],
+  );
+
+  const crypto = Boolean(report && isCryptoTicker(report.ticker));
 
   const showSignal = useCallback((key: string | null) => {
     setSelectedKey(key);
@@ -354,6 +409,17 @@ export default function CyclePage() {
             )}
 
             <div className="mt-4" ref={chartRef}>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-xs font-medium">차트 봉</p>
+                <TimeframeSelect value={tf} onChange={setTf} />
+              </div>
+              <p className="mb-2 text-[11px] leading-relaxed text-muted">
+                {tf === "1d"
+                  ? "주봉·월봉으로 바꿔도 성적표는 일봉 채점입니다."
+                  : <>지금은 <b className="text-white">{CHART_TF_LABEL[tf]}</b>으로 봅니다. 성적표의 켜짐·적중은 일봉 채점 그대로입니다.</>}
+              </p>
+              {crypto ? <div className="mb-2"><BtcSpotHeader ticker={report.ticker} /></div> : null}
+
               {/* 지표 하나씩 고르기 — 29개를 다 겹치면 아무것도 안 보인다 */}
               <div className="mb-2 rounded-xl border border-border bg-bg p-2">
                 <div className="flex items-center gap-1.5">
@@ -413,14 +479,13 @@ export default function CyclePage() {
               </div>
 
               <CycleChart
-                series={payload.series}
-                troughDates={report.cycles.map((c) => c.troughDate)}
-                peakDates={report.cycles
-                  .map((c) => c.nextPeakDate)
-                  .filter((d): d is string => d != null)}
-                signalDates={markerDates}
-                matchedSignalDates={matchedDates}
+                series={viewSeries}
+                troughDates={troughDates}
+                peakDates={peakDates}
+                signalDates={snappedMarkers}
+                matchedSignalDates={snappedMatched}
                 plot={plot}
+                tf={tf}
               />
 
               <p className="mt-2 text-[11px] leading-relaxed text-muted">
@@ -445,6 +510,16 @@ export default function CyclePage() {
                   </>
                 ) : null}
               </p>
+
+              {crypto ? (
+                <div className="mt-3">
+                  <TradingViewChart
+                    symbol={toTradingViewSymbol(report.ticker)}
+                    interval={CHART_TF_TV[tf]}
+                    caption={`${toTradingViewSymbol(report.ticker)} 현물 지수입니다. 바이낸스 무기한 선물(.P)이 아닙니다.`}
+                  />
+                </div>
+              ) : null}
             </div>
           </section>
 
@@ -513,6 +588,7 @@ export default function CyclePage() {
               clearCycle();
               setPayload(null);
               setSelectedKey(null);
+              setTf("1d");
             }}
             className="w-full rounded-xl border border-border bg-surface py-3 text-sm text-muted"
           >
