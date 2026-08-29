@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import CommandInput from "@/components/CommandInput";
 import MatchList from "@/components/MatchList";
+import NavTabs from "@/components/NavTabs";
 import SummaryCard from "@/components/SummaryCard";
 import TickerInput from "@/components/TickerInput";
 import AssistantChat from "@/components/AssistantChat";
@@ -176,8 +177,9 @@ export default function ResultsPage() {
 
   return (
     <main className="mx-auto max-w-lg px-4 py-6 pb-28">
+      <NavTabs />
       <div className="mb-4 flex items-center justify-between gap-2">
-        <Link href="/" className="text-sm text-muted">← 첫 화면</Link>
+        <Link href="/" className="text-sm text-muted">← 다시 검색</Link>
         <div className="flex gap-2">
           {alertHref ? <Link href={alertHref} className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-muted">🔔 이 신호 알림</Link> : null}
           <button type="button" onClick={exportCsv} className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-muted">CSV 내보내기</button>

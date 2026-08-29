@@ -8,7 +8,11 @@ import { toStooqCryptoSymbol, toTwelveSymbol, tickerFallbacks } from "./symbols"
 import { TwelveDataProvider, twelveDataKey } from "./twelvedata";
 import { YahooProvider } from "./yahoo";
 
-const YEARS = 5;
+/** 거래량 분석 기본 기간. 짧게 유지해야 시세 소스가 덜 막힌다. */
+export const DEFAULT_YEARS = 5;
+
+/** 사이클 분석용 최대 기간. 상승장 전환은 5년에 한두 번뿐이라 길게 받아야 한다. */
+export const MAX_YEARS = 20;
 
 class MappedProvider implements DataProvider {
   constructor(
@@ -93,14 +97,18 @@ function tickerNotFound(attempts: Attempt[]): Attempt | null {
   return null;
 }
 
-async function fetchFromChain(ticker: string, tried: Set<string> = new Set()): Promise<Bar[]> {
+async function fetchFromChain(
+  ticker: string,
+  years: number,
+  tried: Set<string> = new Set(),
+): Promise<Bar[]> {
   tried.add(ticker);
   const providers = getProviders(ticker);
   const attempts: Attempt[] = [];
 
   for (const provider of providers) {
     try {
-      const bars = await provider.getDailyBars(ticker, YEARS);
+      const bars = await provider.getDailyBars(ticker, years);
       if (isCryptoTicker(ticker) && !hasUsableVolume(bars)) {
         throw new DataProviderError(
           `'${ticker}' 거래량이 비어 있습니다 (${provider.name}).`,
@@ -122,7 +130,7 @@ async function fetchFromChain(ticker: string, tried: Set<string> = new Set()): P
   const notFoundEarly = tickerNotFound(attempts);
   if (notFoundEarly && sibling) {
     try {
-      return await fetchFromChain(sibling, tried);
+      return await fetchFromChain(sibling, years, tried);
     } catch (e) {
       if (!(e instanceof DataProviderError && e.status === 404)) throw e;
     }
@@ -158,10 +166,15 @@ async function fetchFromChain(ticker: string, tried: Set<string> = new Set()): P
 
 export type LoadOptions = {
   forceFresh?: boolean;
+  /** 몇 년치를 받을지. 기본 5년. 사이클 분석은 길게 요청한다. */
+  years?: number;
 };
 
 export async function loadBars(ticker: string, opts: LoadOptions = {}): Promise<Bar[]> {
-  const cached = await getCachedBars(ticker);
+  const years = Math.min(MAX_YEARS, Math.max(1, Math.round(opts.years ?? DEFAULT_YEARS)));
+  // 기본 기간은 기존 캐시 키를 그대로 쓴다 (배포 직후 캐시가 통째로 비지 않게).
+  const cacheYears = years === DEFAULT_YEARS ? undefined : years;
+  const cached = await getCachedBars(ticker, cacheYears);
   const cacheOk =
     cached &&
     (opts.forceFresh ? false : cached.fresh) &&
@@ -169,8 +182,8 @@ export async function loadBars(ticker: string, opts: LoadOptions = {}): Promise<
   if (cacheOk && cached) return cached.bars;
 
   try {
-    const bars = await fetchFromChain(ticker);
-    await setCachedBars(ticker, bars);
+    const bars = await fetchFromChain(ticker, years);
+    await setCachedBars(ticker, bars, cacheYears);
     return bars;
   } catch (e) {
     if (cached && !(isCryptoTicker(ticker) && !hasUsableVolume(cached.bars))) return cached.bars;

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import NavTabs from "@/components/NavTabs";
 import TickerInput from "@/components/TickerInput";
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import {
@@ -136,9 +137,9 @@ export default function AlertsPage() {
   const ready = Boolean(state?.storage) && telegramReady;
 
   return (
-    <main className="mx-auto max-w-lg px-4 py-8 pb-24">
-      <Link href="/" className="text-sm text-muted">← 첫 화면</Link>
-      <header className="mb-6 mt-4">
+    <main className="mx-auto max-w-lg px-4 py-6 pb-24">
+      <NavTabs />
+      <header className="mb-6">
         <h1 className="text-2xl font-black">텔레그램 알림</h1>
         <p className="mt-1.5 text-sm text-muted leading-relaxed">등록한 종목(주식·비트코인)에 신호가 뜨는 날, 미국장 마감 뒤에 텔레그램으로 알려드립니다.</p>
       </header>
