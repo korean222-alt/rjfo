@@ -11,7 +11,7 @@ import { analyzeCycle } from "../lib/cycle";
 import { findCycles, findPivots } from "../lib/cycle/regime";
 import { eventIndices } from "../lib/cycle/evaluate";
 import { toMonthly, toWeekly, projectToDaily, barsForView, snapDatesToView } from "../lib/cycle/resample";
-import { ema, macd, rsi, sma } from "../lib/cycle/ta";
+import { atr, ema, macd, rsi, sma, supertrend } from "../lib/cycle/ta";
 import { narrate } from "../lib/cycle/narrative";
 import { plotForSignal, plotForView } from "../lib/cycle/plot";
 import { buildSignals } from "../lib/cycle/signals";
@@ -362,10 +362,103 @@ console.log("\n[8] 차트 보기: 일/주/월 + BTC 현물 심볼");
   assert(report.totalBars === longBars.length, "채점 봉 수는 일봉 그대로");
 }
 
-// ── 9. 실데이터 (인자로 티커를 주면) ──────────────────────────────
+// ── 9. 슈퍼트렌드 · 50주선 ────────────────────────────────────────
+console.log("\n[9] 슈퍼트렌드 · 50주선");
+{
+  // ATR: 고가/저가가 종가 ±0.5%인 합성 봉을 naive Wilder로 다시 계산해 대조한다.
+  const closes = Array.from({ length: 120 }, (_, i) => 100 + i);
+  const bars = barsFromCloses(closes);
+  const a = atr(bars, 10);
+
+  const tr: number[] = [0];
+  for (let i = 1; i < bars.length; i++) {
+    const b = bars[i];
+    const p = bars[i - 1];
+    tr.push(Math.max(b.high - b.low, Math.abs(b.high - p.close), Math.abs(b.low - p.close)));
+  }
+  let naive = tr.slice(1, 11).reduce((s, v) => s + v, 0) / 10;
+  approx(a[10], naive, 1e-9, "ATR(10) 첫 값 = TR 10개 단순평균");
+  for (let i = 11; i <= 40; i++) naive = (naive * 9 + tr[i]) / 10;
+  approx(a[40], naive, 1e-9, "ATR(10)[40] (naive Wilder 대조)");
+  assert(a[9] == null, "ATR는 10봉이 차기 전에는 null");
+
+  // 첫 반전 전에는 값을 내지 않는다. 단조 상승만 하면 반전이 없으므로 전부 null이어야 한다.
+  const rising = supertrend(barsFromCloses(closes));
+  assert(
+    rising.up.every((v) => v == null),
+    "단조 상승: 반전이 없으니 전부 null (시드 추세를 적중으로 세지 않는다)",
+  );
+
+  // 내려가다 올라오는 시계열: 하락으로 뒤집힌 뒤 다시 상승으로 뒤집혀야 한다.
+  const vShape = [
+    ...Array.from({ length: 80 }, (_, i) => 200 - i * 1.5),
+    ...Array.from({ length: 120 }, (_, i) => 80 + i * 2),
+  ];
+  const vBars = barsFromCloses(vShape);
+  const st = supertrend(vBars);
+  const firstDown = st.up.findIndex((v) => v === false);
+  const turnedUp = st.up.findIndex((v, i) => v === true && i > firstDown && firstDown >= 0);
+  assert(firstDown > 0, `하락 구간에서 하락으로 뒤집힘 (idx ${firstDown})`);
+  assert(turnedUp > firstDown, `반등 뒤 상승으로 다시 뒤집힘 (idx ${turnedUp})`);
+  assert(turnedUp > 80 && turnedUp < 120, `전환 시점이 바닥(idx 80) 부근 (idx ${turnedUp})`);
+
+  // 선은 상승 추세면 종가 아래, 하락 추세면 위에 있어야 한다. 반대면 부호가 뒤집힌 것이다.
+  const wrongSide = st.up.filter((v, i) => {
+    if (v == null || st.line[i] == null) return false;
+    return v ? st.line[i]! > vBars[i].close : st.line[i]! < vBars[i].close;
+  }).length;
+  assert(wrongSide === 0, `슈퍼트렌드 선이 추세와 같은 쪽 (어긋남 ${wrongSide}개)`);
+
+  // 두 지표가 배터리와 차트에 실제로 등록됐는지.
+  // [7]과 같은 시계열: 추세 + 진동 + 결정론적 노이즈. 슈퍼트렌드가 실제로 몇 번 뒤집힌다.
+  const longCloses: number[] = [100];
+  for (let i = 1; i < 1600; i++) {
+    longCloses.push(
+      longCloses[i - 1] * (1 + 0.0004 + Math.sin(i / 90) * 0.004 + Math.sin(i * 2.3) * 0.006),
+    );
+  }
+  const longBars = enrich(barsFromCloses(longCloses));
+
+  const flips = supertrend(longBars).up.filter(
+    (v, i, arr) => v != null && i > 0 && arr[i - 1] != null && arr[i - 1] !== v,
+  ).length;
+  assert(flips > 2, `1600봉에서 추세가 여러 번 뒤집힌다 (${flips}회)`);
+  const keys = buildSignals(longBars).map((s) => s.key);
+  assert(keys.includes("supertrend"), "배터리에 슈퍼트렌드 있음");
+  assert(keys.includes("w_ma50"), "배터리에 50주선 있음");
+
+  for (const key of ["supertrend", "w_ma50"]) {
+    const plot = plotForSignal(key, longBars);
+    assert(
+      plot.overlays.length > 0 && plot.overlays[0].data.length > 0 && Boolean(plot.rule),
+      `${key} 차트 오버레이와 설명 있음`,
+    );
+  }
+
+  // 50주선은 30주선·200주선과 다른 선이어야 한다 (period 파싱이 틀리면 같아진다).
+  const w50 = plotForSignal("w_ma50", longBars).overlays[0];
+  const w30 = plotForSignal("w_ma30", longBars).overlays[0];
+  const w200 = plotForSignal("w_ma200", longBars).overlays[0];
+  assert(w50.label === "50주선", `50주선 라벨 (실제 "${w50.label}")`);
+  assert(
+    w50.data[w50.data.length - 1].value !== w30.data[w30.data.length - 1].value &&
+      w50.data[w50.data.length - 1].value !== w200.data[w200.data.length - 1].value,
+    "50주선 값이 30주선·200주선과 다름",
+  );
+
+  // 주봉 화면에서 50주선은 그 봉의 SMA(50)로 그린다 (일봉에 계단으로 펼치지 않는다).
+  const viewed = plotForView("w_ma50", longBars, "1w");
+  assert(viewed.overlays[0].label === "50주선", `주봉 보기에서도 50주선 (실제 "${viewed.overlays[0].label}")`);
+  assert(
+    viewed.overlays[0].data.length < w50.data.length / 4,
+    "주봉 보기는 주봉 개수만큼만 점을 그린다",
+  );
+}
+
+// ── 10. 실데이터 (인자로 티커를 주면) ─────────────────────────────
 const ticker = process.argv[2];
 if (ticker) {
-  console.log(`\n[9] 실데이터: ${ticker}`);
+  console.log(`\n[10] 실데이터: ${ticker}`);
   (async () => {
     const { loadBars, MAX_YEARS } = await import("../lib/data");
     const { normalizeTicker } = await import("../lib/data/provider");
