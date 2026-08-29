@@ -3,7 +3,7 @@
  *
  * 성적표에서 지표를 고르면 그 지표 '자체'가 차트에 나와야 한다.
  * 200일선을 고르면 200일선이, MACD를 고르면 아래 패널에 MACD와 시그널선이.
- * 31개를 한꺼번에 겹치면 아무것도 안 보이므로 항상 하나만 그린다.
+ * 30개를 한꺼번에 겹치면 아무것도 안 보이므로 항상 하나만 그린다.
  *
  * 계산은 서버 채점과 같은 함수(ta.ts, indicators.ts)를 브라우저에서 그대로 돌린다.
  * 다른 구현으로 다시 짜면 "차트에선 선 위인데 신호는 안 떴다" 같은 어긋남이 생긴다.
@@ -22,12 +22,10 @@ import {
   rsi,
   sma,
   stochastic,
-  supertrend,
 } from "./ta";
 import { projectToDaily, toMonthly, toWeekly, type ChartTf, CHART_TF_UNIT } from "./resample";
 
-/** value가 null이면 그 날은 선을 끊는다 (슈퍼트렌드처럼 구간마다 색이 바뀌는 지표용). */
-export type PlotPoint = { date: string; value: number | null };
+export type PlotPoint = { date: string; value: number };
 
 export type PlotLine = {
   label: string;
@@ -64,46 +62,6 @@ function dated(bars: EnrichedBar[], values: (number | null)[], label: string, co
     if (v != null && Number.isFinite(v)) data.push({ date: bars[i].date, value: v });
   }
   return { label, color, data, ...extra };
-}
-
-/**
- * 값이 없는 날을 건너뛰지 않고 null 점으로 남긴다.
- *
- * dated()는 없는 값을 아예 빼버려서, 구간이 끊긴 선을 넘기면 차트가 그 사이를
- * 직선으로 이어버린다. 슈퍼트렌드처럼 상승/하락 구간을 다른 색 선으로 나눠 그릴 때는
- * 끊긴 자리가 실제로 끊겨 보여야 한다.
- */
-function datedWithGaps(
-  bars: EnrichedBar[],
-  values: (number | null)[],
-  label: string,
-  color: string,
-  extra: Partial<PlotLine> = {},
-): PlotLine {
-  const ok = (v: number | null | undefined) => v != null && Number.isFinite(v);
-  const first = values.findIndex(ok);
-  const last = values.length - 1 - [...values].reverse().findIndex(ok);
-  if (first < 0) return { label, color, data: [], ...extra };
-
-  const data: PlotPoint[] = [];
-  for (let i = first; i <= last; i++) {
-    data.push({ date: bars[i].date, value: ok(values[i]) ? values[i]! : null });
-  }
-  return { label, color, data, ...extra };
-}
-
-/**
- * 슈퍼트렌드는 추세에 따라 선 색이 바뀌고, 뒤집히는 순간 선이 가격 반대편으로 건너뛴다.
- * 한 줄로 그리면 그 점프가 긴 사선이 되어 있지도 않은 추세처럼 보인다. 그래서
- * 상승 구간(가격 아래, 초록)과 하락 구간(가격 위, 빨강)을 아예 다른 선으로 내보낸다.
- */
-function supertrendOverlays(bars: EnrichedBar[]): PlotLine[] {
-  const s = supertrend(bars);
-  const only = (want: boolean) => s.line.map((v, i) => (s.up[i] === want ? v : null));
-  return [
-    datedWithGaps(bars, only(true), "슈퍼트렌드 상승", C.green, { width: 2 }),
-    datedWithGaps(bars, only(false), "슈퍼트렌드 하락", C.red, { width: 2 }),
-  ];
 }
 
 /** 주봉/월봉 지표를 일봉 날짜 위에 계단식으로. 마감된 기간의 값만 쓴다. */
@@ -177,14 +135,6 @@ function build(key: string, ctx: Ctx): SignalPlot {
           dated(bars, ic.base, "기준선", C.purple, { dashed: true, width: 1 }),
         ],
         rule: "종가가 구름(선행스팬 A·B) 위에 있으면 켜짐",
-      };
-    }
-
-    case "supertrend": {
-      return {
-        ...none,
-        overlays: supertrendOverlays(bars),
-        rule: "선이 가격 아래(초록)면 켜짐, 가격 위(빨강)면 꺼짐 — ATR 10 · 배수 3",
       };
     }
 
@@ -507,13 +457,6 @@ function buildOn(key: string, bars: EnrichedBar[], unit: string): SignalPlot {
   }
 
   switch (key) {
-    case "supertrend": {
-      return {
-        ...none,
-        overlays: supertrendOverlays(bars),
-        rule: "선이 가격 아래(초록)면 켜짐, 가격 위(빨강)면 꺼짐 — ATR 10 · 배수 3, 선택한 봉 기준",
-      };
-    }
     case "ma200_slope": {
       const ma = sma(closes, 200);
       return {
