@@ -420,7 +420,7 @@ export default function CyclePage() {
               </p>
               {crypto ? <div className="mb-2"><BtcSpotHeader ticker={report.ticker} /></div> : null}
 
-              {/* 지표 하나씩 고르기 — 31개를 다 겹치면 아무것도 안 보인다 */}
+              {/* 지표 하나씩 고르기 — 30개를 다 겹치면 아무것도 안 보인다 */}
               <div className="mb-2 rounded-xl border border-border bg-bg p-2">
                 <div className="flex items-center gap-1.5">
                   <button
