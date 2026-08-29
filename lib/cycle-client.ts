@@ -13,7 +13,8 @@ import type { CycleReport } from "@/lib/cycle";
 
 export type CyclePayload = {
   report: CycleReport;
-  series: { date: string; close: number }[];
+  /** 캔들 + 지표 오버레이를 브라우저에서 그리기 위한 OHLCV. */
+  series: Bar[];
   reply: string;
   fallbackText: string;
 };

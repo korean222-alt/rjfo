@@ -13,6 +13,8 @@ import { eventIndices } from "../lib/cycle/evaluate";
 import { toMonthly, toWeekly, projectToDaily } from "../lib/cycle/resample";
 import { ema, macd, rsi, sma } from "../lib/cycle/ta";
 import { narrate } from "../lib/cycle/narrative";
+import { plotForSignal } from "../lib/cycle/plot";
+import { buildSignals } from "../lib/cycle/signals";
 import type { Bar } from "../types";
 
 let failures = 0;
@@ -227,10 +229,69 @@ console.log("\n[6] 전체 파이프라인");
   }
 }
 
-// ── 7. 실데이터 (인자로 티커를 주면) ──────────────────────────────
+// ── 7. 지표마다 차트 그림이 있는지 ────────────────────────────────
+//
+// plotForSignal은 switch라서 키를 빠뜨리면 조용히 빈 차트가 나온다.
+// 지표를 추가하고 그림을 안 만들면 여기서 걸린다.
+console.log("\n[7] 지표별 차트 그림");
+{
+  const closes: number[] = [100];
+  for (let i = 1; i < 1600; i++) {
+    // 추세 + 진동 + 결정론적 노이즈. 모든 지표가 값을 갖도록 충분히 길게.
+    closes.push(closes[i - 1] * (1 + 0.0004 + Math.sin(i / 90) * 0.004 + Math.sin(i * 2.3) * 0.006));
+  }
+  const bars = enrich(barsFromCloses(closes));
+  const signals = buildSignals(bars);
+
+  const missing: string[] = [];
+  const empty: string[] = [];
+  for (const sig of signals) {
+    const plot = plotForSignal(sig.key, bars);
+    const lines = [...plot.overlays, ...(plot.pane?.lines ?? [])];
+    if (!lines.length || !plot.rule) {
+      missing.push(sig.key);
+      continue;
+    }
+    if (lines.every((l) => l.data.length === 0)) empty.push(sig.key);
+  }
+  assert(missing.length === 0, `모든 지표에 그림과 설명이 있다 (빠짐: ${missing.join(", ") || "없음"})`);
+  assert(empty.length === 0, `그린 선에 값이 들어 있다 (빈 것: ${empty.join(", ") || "없음"})`);
+
+  // 주봉 지표는 계단식이라 같은 값이 며칠씩 이어진다. 일봉 지표와 구분되는지 확인.
+  const weekly = plotForSignal("w_ma30", bars);
+  const wData = weekly.overlays[0].data;
+  const distinct = new Set(wData.map((p) => p.value)).size;
+  assert(
+    distinct > 10 && distinct < wData.length / 2,
+    `주봉선은 계단식 (${wData.length}개 점, 값 ${distinct}종)`,
+  );
+
+  // 오버레이는 가격 축과 같은 스케일이어야 캔들 위에 겹쳐진다.
+  const ma200 = plotForSignal("ma200", bars).overlays[0].data;
+  const last = ma200[ma200.length - 1].value;
+  const lastClose = bars[bars.length - 1].close;
+  assert(
+    Math.abs(last / lastClose - 1) < 0.5,
+    `200일선이 가격과 같은 스케일 (선 ${last.toFixed(1)} vs 종가 ${lastClose.toFixed(1)})`,
+  );
+
+  // MACD/RSI처럼 단위가 다른 지표는 별도 패널로 가야 한다.
+  for (const key of ["macd_d", "macd_w", "macd_m", "rsi_d50", "rsi_w50", "stoch", "cci", "adx", "obv"]) {
+    const plot = plotForSignal(key, bars);
+    assert(plot.pane != null, `${key}는 별도 패널`);
+  }
+  for (const key of ["ma200", "gc_50_200", "ichimoku", "bb_mid", "high_52w", "hh_hl"]) {
+    const plot = plotForSignal(key, bars);
+    assert(plot.overlays.length > 0 && plot.pane == null, `${key}는 가격 위 오버레이`);
+  }
+
+  console.log(`  ✓ 지표 ${signals.length}개 전부 그림 있음`);
+}
+
+// ── 8. 실데이터 (인자로 티커를 주면) ──────────────────────────────
 const ticker = process.argv[2];
 if (ticker) {
-  console.log(`\n[7] 실데이터: ${ticker}`);
+  console.log(`\n[8] 실데이터: ${ticker}`);
   (async () => {
     const { loadBars, MAX_YEARS } = await import("../lib/data");
     const { normalizeTicker } = await import("../lib/data/provider");

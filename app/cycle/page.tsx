@@ -1,10 +1,12 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CycleSignalTable from "@/components/CycleSignalTable";
 import NavTabs from "@/components/NavTabs";
 import TickerInput from "@/components/TickerInput";
+import { SIGNAL_GROUPS } from "@/lib/cycle";
+import { enrichForPlot, plotForSignal } from "@/lib/cycle/plot";
 import { runCycle, type CyclePayload } from "@/lib/cycle-client";
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import { clearCycle, loadCycle, saveCycle } from "@/lib/session";
@@ -32,6 +34,7 @@ export default function CyclePage() {
   const [bearPct, setBearPct] = useState<number | null>(null);
   const [bullPct, setBullPct] = useState<number | null>(null);
   const [question, setQuestion] = useState("");
+  const chartRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const saved = loadCycle<CyclePayload>();
@@ -93,6 +96,56 @@ export default function CyclePage() {
     () => (report && selectedKey ? report.signals.find((s) => s.key === selectedKey) ?? null : null),
     [report, selectedKey],
   );
+
+  // 지표 선을 그리려면 파생값(OBV 기울기 등)이 필요하다. 서버 채점과 같은 함수를 쓴다.
+  // 5,000봉짜리 계산이라 티커가 바뀔 때만 한 번 돈다.
+  const enrichedBars = useMemo(
+    () => (payload?.series?.length ? enrichForPlot(payload.series) : null),
+    [payload?.series],
+  );
+
+  const plot = useMemo(
+    () => (enrichedBars && selectedKey ? plotForSignal(selectedKey, enrichedBars) : null),
+    [enrichedBars, selectedKey],
+  );
+
+  /** 성적표 순위(= 종합 순) 그대로 앞뒤로 넘긴다. */
+  const stepSignal = useCallback(
+    (delta: number) => {
+      if (!report?.signals.length) return;
+      const list = report.signals;
+      const at = selectedKey ? list.findIndex((s) => s.key === selectedKey) : -1;
+      const next = at < 0 ? (delta > 0 ? 0 : list.length - 1) : (at + delta + list.length) % list.length;
+      setSelectedKey(list[next].key);
+    },
+    [report, selectedKey],
+  );
+
+  /**
+   * 차트에 찍을 신호일.
+   *
+   * RSI 50처럼 자주 켜지는 지표는 20년에 250번씩 뜬다. 전부 찍으면 점이 캔들을
+   * 덮어버려 아무것도 안 보인다. 그때는 '상승장 시작 부근에서 뜬 것'만 남긴다
+   * (숨겼다는 사실은 차트 아래에 적는다).
+   */
+  const MAX_MARKERS = 60;
+  const matchedDates = useMemo(
+    () =>
+      selectedSignal
+        ? selectedSignal.cycleHits.map((h) => h.eventDate).filter((d): d is string => d != null)
+        : [],
+    [selectedSignal],
+  );
+  const markerDates = useMemo(() => {
+    if (!selectedSignal) return [];
+    return selectedSignal.events.length <= MAX_MARKERS ? selectedSignal.events : matchedDates;
+  }, [selectedSignal, matchedDates]);
+  const markersTrimmed = Boolean(selectedSignal && selectedSignal.events.length > MAX_MARKERS);
+
+  const showSignal = useCallback((key: string | null) => {
+    setSelectedKey(key);
+    if (key) chartRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
   const avgAtStart = useMemo(() => {
     if (!report?.cycleStarts.length) return null;
@@ -300,21 +353,98 @@ export default function CyclePage() {
               </p>
             )}
 
-            <div className="mt-4">
+            <div className="mt-4" ref={chartRef}>
+              {/* 지표 하나씩 고르기 — 29개를 다 겹치면 아무것도 안 보인다 */}
+              <div className="mb-2 rounded-xl border border-border bg-bg p-2">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => stepSignal(-1)}
+                    aria-label="이전 지표"
+                    className="shrink-0 rounded-lg border border-border px-2.5 py-2 text-sm text-muted"
+                  >
+                    ‹
+                  </button>
+                  <select
+                    value={selectedKey ?? ""}
+                    onChange={(e) => setSelectedKey(e.target.value || null)}
+                    className="min-w-0 flex-1 rounded-lg border border-border bg-surface px-2 py-2 text-sm"
+                  >
+                    <option value="">지표 없음 (캔들만)</option>
+                    {SIGNAL_GROUPS.map((g) => {
+                      const inGroup = report.signals.filter((sig) => sig.group === g);
+                      if (!inGroup.length) return null;
+                      return (
+                        <optgroup key={g} label={g}>
+                          {inGroup.map((sig) => (
+                            <option key={sig.key} value={sig.key}>
+                              {sig.currentlyOn ? "● " : "○ "}
+                              {sig.label} · {sig.hitCount}/{report.cycles.length}
+                            </option>
+                          ))}
+                        </optgroup>
+                      );
+                    })}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => stepSignal(1)}
+                    aria-label="다음 지표"
+                    className="shrink-0 rounded-lg border border-border px-2.5 py-2 text-sm text-muted"
+                  >
+                    ›
+                  </button>
+                </div>
+                {selectedSignal ? (
+                  <p className="mt-2 px-0.5 text-[11px] leading-relaxed text-muted">
+                    <b className="text-white">
+                      {report.signals.findIndex((sig) => sig.key === selectedSignal.key) + 1}위
+                    </b>{" "}
+                    · {plot?.rule || selectedSignal.why} · 지금{" "}
+                    <b className={selectedSignal.currentlyOn ? "text-up" : "text-muted"}>
+                      {selectedSignal.currentlyOn ? "켜짐" : "꺼짐"}
+                    </b>
+                  </p>
+                ) : (
+                  <p className="mt-2 px-0.5 text-[11px] text-muted">
+                    지표를 고르면 그 지표의 선과 신호 발생일(노란 점)이 차트에 그려집니다.
+                  </p>
+                )}
+              </div>
+
               <CycleChart
                 series={payload.series}
                 troughDates={report.cycles.map((c) => c.troughDate)}
                 peakDates={report.cycles
                   .map((c) => c.nextPeakDate)
                   .filter((d): d is string => d != null)}
-                signalDates={selectedSignal?.events ?? []}
-                signalLabel={selectedSignal?.label ?? "신호"}
+                signalDates={markerDates}
+                matchedSignalDates={matchedDates}
+                plot={plot}
               />
-              {selectedSignal ? (
-                <p className="mt-2 text-[11px] text-muted">
-                  노란 점 = &quot;{selectedSignal.label}&quot; 신호 {selectedSignal.eventCount}회
-                </p>
-              ) : null}
+
+              <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                초록 화살표 = 상승장 시작, 빨간 화살표 = 고점.
+                {selectedSignal ? (
+                  <>
+                    {" "}
+                    <b className="text-amber-300">노란 점</b> = 상승장 시작 부근에서 뜬 신호{" "}
+                    {matchedDates.length}회
+                    {markersTrimmed ? (
+                      <>
+                        . 이 지표는 전체 {selectedSignal.eventCount}회로 너무 자주 떠서 나머지는
+                        표시하지 않았습니다(그만큼 잘 속는다는 뜻입니다 — 우연대비{" "}
+                        {selectedSignal.lift?.toFixed(2) ?? "—"}배).
+                      </>
+                    ) : (
+                      <>
+                        , 회색 점 = 그 밖의 신호 {selectedSignal.eventCount - matchedDates.length}회
+                        (전체 {selectedSignal.eventCount}회).
+                      </>
+                    )}
+                  </>
+                ) : null}
+              </p>
             </div>
           </section>
 
@@ -326,7 +456,12 @@ export default function CyclePage() {
             {commonSignals.length ? (
               <ul className="mt-2.5 space-y-1.5">
                 {commonSignals.map((s) => (
-                  <li key={s.key} className="flex items-center gap-2 text-sm">
+                  <li key={s.key}>
+                    <button
+                      type="button"
+                      onClick={() => showSignal(s.key)}
+                      className="flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left text-sm active:bg-bg"
+                    >
                     <span
                       aria-hidden
                       className={`h-2 w-2 shrink-0 rounded-full ${s.currentlyOn ? "bg-up" : "bg-border"}`}
@@ -342,6 +477,10 @@ export default function CyclePage() {
                     <span className="shrink-0 text-[11px] text-muted">
                       {s.currentlyOn ? "켜짐" : "꺼짐"}
                     </span>
+                    <span aria-hidden className="shrink-0 text-[11px] text-muted">
+                      📈
+                    </span>
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -352,7 +491,7 @@ export default function CyclePage() {
             )}
           </section>
 
-          <CycleSignalTable report={report} selectedKey={selectedKey} onSelect={setSelectedKey} />
+          <CycleSignalTable report={report} selectedKey={selectedKey} onSelect={showSignal} />
 
           {/* 경고 */}
           <section className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">

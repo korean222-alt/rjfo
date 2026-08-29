@@ -47,6 +47,14 @@ async function polish(facts: string, question: string): Promise<string | null> {
   }
 }
 
+/** 큰 값은 소수점을 줄인다. 67234.5678 → 67234.6, 0.00012345 → 0.00012345 */
+function round(v: number): number {
+  const abs = Math.abs(v);
+  if (abs >= 1000) return Number(v.toFixed(1));
+  if (abs >= 1) return Number(v.toFixed(3));
+  return Number(v.toFixed(8));
+}
+
 function clampPct(raw: unknown, fallback: number): number {
   const n = Number(raw);
   if (!Number.isFinite(n)) return fallback;
@@ -115,10 +123,16 @@ export async function POST(req: Request) {
         : `${ticker}는 과거 상승장이 올 때 어떤 지표들이 공통으로 신호를 줬어?`;
     const reply = (await polish(factsForLlm(report), question)) ?? fallbackText;
 
-    // 차트용 시계열. 20년치라 OHLC 전부 보내면 payload가 커진다. 종가만 보낸다.
+    // 차트용 시계열. 캔들과 지표 오버레이를 브라우저에서 그리려면 OHLCV가 다 필요하다.
+    // 20년치면 5,000봉이라 자릿수를 줄여 payload를 절반으로 만든다
+    // (지표 계산에 쓰기엔 충분한 정밀도다).
     const series = enriched.map((b) => ({
       date: b.date,
-      close: Number(b.close.toFixed(4)),
+      open: round(b.open),
+      high: round(b.high),
+      low: round(b.low),
+      close: round(b.close),
+      volume: Math.round(b.volume),
     }));
 
     return json({ report, series, reply, fallbackText });

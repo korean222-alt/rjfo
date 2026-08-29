@@ -243,7 +243,7 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                           : "border-border bg-surface text-muted"
                       }`}
                     >
-                      {isSelected ? "차트 표시 끄기" : "차트에 신호 표시"}
+                      {isSelected ? "차트에서 내리기" : "📈 차트에서 보기"}
                     </button>
                     <span className="text-[11px] text-muted">
                       마지막 신호 {s.lastEventDate ?? "—"}
