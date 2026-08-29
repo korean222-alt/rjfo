@@ -34,10 +34,18 @@ type Props = {
   series: SeriesPoint[];
   matchDates: string[];
   maPeriods?: number[];
+  /** 이평선 기간의 단위. 주봉·월봉으로 보면 "일"이 아니다. */
+  maUnit?: string;
   extraMarkers?: ChartMarker[];
 };
 
-export default function VolumeChart({ series, matchDates, maPeriods = [], extraMarkers = [] }: Props) {
+export default function VolumeChart({
+  series,
+  matchDates,
+  maPeriods = [],
+  maUnit = "일",
+  extraMarkers = [],
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const hasFunding = series.some((p) => p.funding != null && Number.isFinite(p.funding));
@@ -184,7 +192,7 @@ export default function VolumeChart({ series, matchDates, maPeriods = [], extraM
           <p className="mt-1 text-xs text-muted leading-relaxed">
             화살표는 조건에 걸린 날입니다.
             {hasFunding ? " 맨 아래 주황/청록 막대가 일평균 펀딩비(%)입니다." : ""}
-            {maPeriods.length ? ` 선은 이평선(${maPeriods.join(", ")}일)입니다.` : ""}
+            {maPeriods.length ? ` 선은 이평선(${maPeriods.join(", ")}${maUnit})입니다.` : ""}
           </p>
         </div>
         <a

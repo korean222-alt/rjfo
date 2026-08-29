@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import TabNav from "@/components/TabNav";
 import TickerInput from "@/components/TickerInput";
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import {
@@ -137,6 +138,7 @@ export default function AlertsPage() {
 
   return (
     <main className="mx-auto max-w-lg px-4 py-8 pb-24">
+      <TabNav />
       <Link href="/" className="text-sm text-muted">← 첫 화면</Link>
       <header className="mb-6 mt-4">
         <h1 className="text-2xl font-black">텔레그램 알림</h1>

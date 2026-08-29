@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import CommandInput from "@/components/CommandInput";
+import TabNav from "@/components/TabNav";
 import TickerInput from "@/components/TickerInput";
 import AssistantChat from "@/components/AssistantChat";
 import { runAnalyze } from "@/lib/analyze-client";
@@ -70,6 +71,8 @@ export default function Home() {
 
   return (
     <main className="mx-auto max-w-lg px-4 py-8 pb-24">
+      <TabNav />
+
       <header className="mb-7 flex items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-black">거래량 분석기</h1>

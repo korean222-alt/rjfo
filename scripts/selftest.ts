@@ -12,6 +12,9 @@ import { analyze, forwardReturn, maxForwardReturn } from "../lib/stats";
 import { checkLatest, formatAlert } from "../lib/alerts/evaluate";
 import { parseMaCommand } from "../lib/ma";
 import { PRESET_CHIPS, PRESET_CONDITIONS } from "../lib/presets";
+import { aggregateBars, bucketStart } from "../lib/timeframe";
+import { bullReport, emaLine, macdLine, rsiLine } from "../lib/bull";
+import { toTradingViewSymbol } from "../lib/tradingview";
 import type { Bar, FilterSpec, PresetName } from "../types";
 
 let failures = 0;
@@ -340,6 +343,156 @@ console.log("\n[8] 알림 판정 (마지막 봉)");
     cryptoHit == null || cryptoHit.bar.date !== today,
     "코인 알림은 미완성 오늘 봉을 건너뛴다",
   );
+}
+
+// ── [9] 봉 집계 (주봉·월봉) ────────────────────────────────────
+console.log("\n[9] 봉 집계");
+{
+  // 2020-01-01은 수요일. 그 주 월요일은 2019-12-30.
+  assert(bucketStart("2020-01-01", "1w") === "2019-12-30", "주봉 시작일 = 그 주 월요일");
+  assert(bucketStart("2020-01-05", "1w") === "2019-12-30", "일요일도 같은 주에 들어간다");
+  assert(bucketStart("2020-01-06", "1w") === "2020-01-06", "월요일은 새 주봉");
+  assert(bucketStart("2020-03-17", "1M") === "2020-03-01", "월봉 시작일 = 그 달 1일");
+  assert(bucketStart("2020-03-17", "1d") === "2020-03-17", "일봉은 그대로");
+
+  // 평일만 있는 일봉 3주치. 집계 결과를 손으로 확인한다.
+  const days: Bar[] = [];
+  for (let i = 0; i < 21; i++) {
+    const d = new Date(Date.UTC(2024, 0, 1 + i));
+    if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue; // 주말 제외
+    days.push({
+      date: d.toISOString().slice(0, 10),
+      open: 100 + i,
+      high: 105 + i,
+      low: 95 + i,
+      close: 101 + i,
+      volume: 1_000 * (i + 1),
+    });
+  }
+
+  const weekly = aggregateBars(days, "1w");
+  const firstWeek = days.filter((b) => b.date >= "2024-01-01" && b.date <= "2024-01-05");
+  assert(weekly.length === 3, `주봉 3개로 묶임 (실제 ${weekly.length})`);
+  assert(weekly[0].date === "2024-01-01", "첫 주봉 시작일 = 2024-01-01(월)");
+  assert(weekly[0].periodEnd === "2024-01-05", "첫 주봉 마지막 거래일 = 2024-01-05(금)");
+  assert(weekly[0].open === firstWeek[0].open, "주봉 시가 = 구간 첫 봉 시가");
+  assert(weekly[0].close === firstWeek[firstWeek.length - 1].close, "주봉 종가 = 구간 마지막 종가");
+  assert(weekly[0].high === Math.max(...firstWeek.map((b) => b.high)), "주봉 고가 = 구간 최고가");
+  assert(weekly[0].low === Math.min(...firstWeek.map((b) => b.low)), "주봉 저가 = 구간 최저가");
+  assert(
+    weekly[0].volume === firstWeek.reduce((a, b) => a + b.volume, 0),
+    "주봉 거래량 = 구간 합",
+  );
+  assert(weekly[0].dayCount === firstWeek.length, "주봉 dayCount = 들어간 일봉 수");
+
+  const monthly = aggregateBars(days, "1M");
+  assert(monthly.length === 1, "같은 달이면 월봉 1개");
+  assert(
+    monthly[0].volume === days.reduce((a, b) => a + b.volume, 0),
+    "월봉 거래량 = 전체 합",
+  );
+  assert(
+    aggregateBars(days, "1d").length === days.length,
+    "일봉은 개수가 그대로",
+  );
+
+  // 펀딩비는 구간 평균
+  const withFunding: Bar[] = days.slice(0, 5).map((b, i) => ({ ...b, funding: (i + 1) / 10_000 }));
+  const fundedWeek = aggregateBars(withFunding, "1w");
+  approx(fundedWeek[0].funding ?? null, 3 / 10_000, 1e-12, "주봉 펀딩비 = 구간 평균");
+}
+
+// ── [10] RSI · EMA · MACD ─────────────────────────────────────
+console.log("\n[10] RSI · EMA · MACD");
+{
+  // EMA(3): 앞 3개 단순평균으로 시작, 이후 k = 2/(3+1) = 0.5
+  const ema3 = emaLine([1, 2, 3, 4, 5], 3);
+  assert(ema3[0] === null && ema3[1] === null, "EMA는 기간 이전 구간이 null");
+  approx(ema3[2], 2, 1e-9, "EMA(3) 첫 값 = (1+2+3)/3");
+  approx(ema3[3], 3, 1e-9, "EMA(3) 다음 값 = 4*0.5 + 2*0.5");
+  approx(ema3[4], 4, 1e-9, "EMA(3) 그 다음 = 5*0.5 + 3*0.5");
+  assert(emaLine([1, 2], 5).every((v) => v === null), "값이 기간보다 적으면 전부 null");
+
+  // 계속 오르기만 하면 RSI는 100 (하락분이 0이라 나눌 게 없다)
+  const rising = Array.from({ length: 40 }, (_, i) => 100 + i);
+  approx(rsiLine(rising, 14)[39], 100, 1e-9, "계속 상승하면 RSI = 100");
+  const falling = Array.from({ length: 40 }, (_, i) => 100 - i);
+  approx(rsiLine(falling, 14)[39], 0, 1e-9, "계속 하락하면 RSI = 0");
+  assert(rsiLine(rising, 14)[13] === null, "RSI는 14봉 전까지 null");
+
+  // 값이 일정하면 두 EMA가 같으므로 MACD도 시그널도 0
+  const flat = new Array(80).fill(100);
+  const flatMacd = macdLine(flat)[79];
+  approx(flatMacd?.macd ?? null, 0, 1e-9, "평평한 시세의 MACD = 0");
+  approx(flatMacd?.hist ?? null, 0, 1e-9, "평평한 시세의 히스토그램 = 0");
+
+  // 꾸준히 오르면 빠른 EMA가 느린 EMA보다 위 → MACD > 0
+  const up = Array.from({ length: 120 }, (_, i) => 100 * 1.01 ** i);
+  const upMacd = macdLine(up)[119];
+  assert((upMacd?.macd ?? 0) > 0, "상승 추세에서 MACD > 0");
+  assert(macdLine(up.slice(0, 20))[19] === null, "봉이 부족하면 MACD는 null");
+}
+
+// ── [11] 상승장 지표 ──────────────────────────────────────────
+console.log("\n[11] 상승장 지표");
+{
+  /** 방향이 정해진 결정론적 일봉. drift가 양수면 상승장. */
+  function trend(n: number, drift: number): Bar[] {
+    const bars: Bar[] = [];
+    let close = 100;
+    for (let i = 0; i < n; i++) {
+      const d = new Date(Date.UTC(2021, 0, 1 + i));
+      const open = close;
+      close = close * (1 + drift);
+      bars.push({
+        date: d.toISOString().slice(0, 10),
+        open,
+        high: Math.max(open, close) * 1.004,
+        low: Math.min(open, close) * 0.996,
+        close,
+        // 오르는 날 거래량을 더 싣는다 (매수/매도 거래량 비가 의미를 갖도록)
+        volume: close >= open ? 1_400_000 : 900_000,
+      });
+    }
+    return bars;
+  }
+
+  for (const tf of ["1d", "1w", "1M"] as const) {
+    const bull = trend(1300, 0.0015);
+    const periods = aggregateBars(bull, tf);
+    const report = bullReport("TEST", tf, enrich(periods), periods);
+    assert(report.indicators.length >= 8, `${tf}: 지표 ${report.indicators.length}개 계산됨`);
+    assert(report.score >= 70, `${tf}: 상승 픽스처 점수 ${report.score} ≥ 70`);
+    assert(report.asOf === periods[periods.length - 1].periodEnd, `${tf}: asOf = 마지막 거래일`);
+    assert(
+      report.bullish + report.neutral + report.bearish === report.indicators.length,
+      `${tf}: 판정 합계 = 지표 수`,
+    );
+
+    const bearPeriods = aggregateBars(trend(1300, -0.0015), tf);
+    const bear = bullReport("TEST", tf, enrich(bearPeriods), bearPeriods);
+    assert(bear.score <= 30, `${tf}: 하락 픽스처 점수 ${bear.score} ≤ 30`);
+  }
+
+  // 봉마다 지표 기간이 실제로 달라야 한다 (같으면 일봉을 그대로 쓴 것).
+  const daily = aggregateBars(trend(1300, 0.0015), "1d");
+  const monthly = aggregateBars(trend(1300, 0.0015), "1M");
+  const dailyLabels = bullReport("T", "1d", enrich(daily), daily).indicators.map((i) => i.label);
+  const monthlyLabels = bullReport("T", "1M", enrich(monthly), monthly).indicators.map((i) => i.label);
+  assert(
+    dailyLabels.join("|") !== monthlyLabels.join("|"),
+    "일봉과 월봉의 지표 기간이 서로 다르다",
+  );
+}
+
+// ── [12] TradingView 심볼 ─────────────────────────────────────
+console.log("\n[12] TradingView 심볼");
+{
+  assert(toTradingViewSymbol("BTC-USD") === "CRYPTO:BTCUSD", "비트코인 = CRYPTO:BTCUSD (현물)");
+  assert(toTradingViewSymbol("ETH-USD") === "CRYPTO:ETHUSD", "이더리움 = CRYPTO:ETHUSD");
+  assert(toTradingViewSymbol("005930.KS") === "KRX:005930", "한국 종목 = KRX:종목코드");
+  assert(toTradingViewSymbol("000660.KQ") === "KRX:000660", "코스닥도 KRX 아래");
+  assert(toTradingViewSymbol("AAPL") === "AAPL", "미국 주식은 거래소 없이");
 }
 
 console.log(
