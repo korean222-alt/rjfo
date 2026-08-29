@@ -3,7 +3,7 @@
  *
  * 성적표에서 지표를 고르면 그 지표 '자체'가 차트에 나와야 한다.
  * 200일선을 고르면 200일선이, MACD를 고르면 아래 패널에 MACD와 시그널선이.
- * 29개를 한꺼번에 겹치면 아무것도 안 보이므로 항상 하나만 그린다.
+ * 31개를 한꺼번에 겹치면 아무것도 안 보이므로 항상 하나만 그린다.
  *
  * 계산은 서버 채점과 같은 함수(ta.ts, indicators.ts)를 브라우저에서 그대로 돌린다.
  * 다른 구현으로 다시 짜면 "차트에선 선 위인데 신호는 안 떴다" 같은 어긋남이 생긴다.
@@ -22,6 +22,7 @@ import {
   rsi,
   sma,
   stochastic,
+  supertrend,
 } from "./ta";
 import { projectToDaily, toMonthly, toWeekly, type ChartTf, CHART_TF_UNIT } from "./resample";
 
@@ -138,10 +139,20 @@ function build(key: string, ctx: Ctx): SignalPlot {
       };
     }
 
+    case "supertrend": {
+      const s = supertrend(bars);
+      return {
+        ...none,
+        overlays: [dated(bars, s.line, "슈퍼트렌드(10, 3)", C.green, { width: 2 })],
+        rule: "슈퍼트렌드 선이 가격 아래로 내려가면(상승 추세) 켜짐 — ATR 10 · 배수 3",
+      };
+    }
+
     // ── 주봉 / 월봉 ─────────────────────────────────────────────
     case "w_ma30":
+    case "w_ma50":
     case "w_ma200": {
-      const period = key === "w_ma30" ? 30 : 200;
+      const period = Number(key.slice(4));
       const w = toWeekly(bars);
       const line = sma(w.bars.map((b) => b.close), period);
       return {
@@ -411,6 +422,7 @@ export function plotForSignal(key: string, bars: EnrichedBar[]): SignalPlot {
  */
 const VIEW_ALIAS: Record<string, string> = {
   w_ma30: "ma30",
+  w_ma50: "ma50",
   w_ma200: "ma200",
   m_ma12: "ma12",
   macd_w: "macd_d",
@@ -455,6 +467,14 @@ function buildOn(key: string, bars: EnrichedBar[], unit: string): SignalPlot {
   }
 
   switch (key) {
+    case "supertrend": {
+      const s = supertrend(bars);
+      return {
+        ...none,
+        overlays: [dated(bars, s.line, "슈퍼트렌드(10, 3)", C.green, { width: 2 })],
+        rule: "슈퍼트렌드 선이 가격 아래로 내려가면(상승 추세) 켜짐 — ATR 10 · 배수 3, 선택한 봉 기준",
+      };
+    }
     case "ma200_slope": {
       const ma = sma(closes, 200);
       return {

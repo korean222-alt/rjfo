@@ -26,6 +26,7 @@ import {
   rsi,
   sma,
   stochastic,
+  supertrend,
 } from "./ta";
 import { projectToDaily, toMonthly, toWeekly } from "./resample";
 
@@ -127,6 +128,13 @@ export function buildSignals(bars: EnrichedBar[]): SignalSeries[] {
     closesAbove(bars, cloud.cloudTop),
   );
 
+  // 슈퍼트렌드는 이평선과 달리 밴드 폭이 변동성을 따라간다. 조용한 바닥권에서는
+  // 빨리 붙고 급락 구간에서는 쉽게 안 뒤집혀서, 이평선보다 전환을 먼저 알리는 편이다.
+  push(
+    { key: "supertrend", label: "슈퍼트렌드 상승", group: "추세", why: "ATR 밴드를 종가가 넘으면 추세가 뒤집힌다. 변동성에 맞춰 폭이 변해 이평선보다 빠르다", timeframe: "일봉" },
+    supertrend(bars).up,
+  );
+
   // ── 주봉 / 월봉 ──────────────────────────────────────────────────
   const weekly = toWeekly(bars);
   const wCloses = weekly.bars.map((b) => b.close);
@@ -135,6 +143,11 @@ export function buildSignals(bars: EnrichedBar[]): SignalSeries[] {
   push(
     { key: "w_ma30", label: "30주선 위 (주봉)", group: "추세", why: "주봉 30주선은 중장기 강세장의 고전적 기준", timeframe: "주봉" },
     fromPeriod(weekly.periodOf, wCloses.map((c, i) => (wMa30[i] == null ? null : c > wMa30[i]!))),
+  );
+  const wMa50 = sma(wCloses, 50);
+  push(
+    { key: "w_ma50", label: "50주선 위 (주봉)", group: "추세", why: "약 1년치 주봉 평균. 30주선과 200주선 사이를 메우는 중장기 기준선", timeframe: "주봉" },
+    fromPeriod(weekly.periodOf, wCloses.map((c, i) => (wMa50[i] == null ? null : c > wMa50[i]!))),
   );
   push(
     { key: "w_ma200", label: "200주선 위 (주봉)", group: "추세", why: "코인 사이클 바닥권 판정에 가장 많이 인용되는 선", timeframe: "주봉" },
