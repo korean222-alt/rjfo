@@ -272,8 +272,8 @@ console.log("\n[7] 지표별 차트 그림");
   const last = ma200[ma200.length - 1].value;
   const lastClose = bars[bars.length - 1].close;
   assert(
-    Math.abs(last / lastClose - 1) < 0.5,
-    `200일선이 가격과 같은 스케일 (선 ${last.toFixed(1)} vs 종가 ${lastClose.toFixed(1)})`,
+    last != null && Math.abs(last / lastClose - 1) < 0.5,
+    `200일선이 가격과 같은 스케일 (선 ${last?.toFixed(1) ?? "없음"} vs 종가 ${lastClose.toFixed(1)})`,
   );
 
   // MACD/RSI처럼 단위가 다른 지표는 별도 패널로 가야 한다.
@@ -434,6 +434,33 @@ console.log("\n[9] 슈퍼트렌드 · 50주선");
       `${key} 차트 오버레이와 설명 있음`,
     );
   }
+
+  // 슈퍼트렌드는 상승(초록)·하락(빨강) 두 선으로 나눠 그린다. 한 줄로 그리면
+  // 뒤집히는 순간의 점프가 긴 사선으로 이어져 없는 추세처럼 보인다.
+  const stPlot = plotForSignal("supertrend", longBars);
+  assert(stPlot.overlays.length === 2, `슈퍼트렌드는 선 2개 (실제 ${stPlot.overlays.length})`);
+  const [upLine, downLine] = stPlot.overlays;
+  assert(upLine.color !== downLine.color, "상승·하락 선 색이 다르다");
+  assert(
+    upLine.data.some((p) => p.value != null) && downLine.data.some((p) => p.value != null),
+    "두 선 모두 실제 값이 있다",
+  );
+  assert(
+    upLine.data.some((p) => p.value == null),
+    "상승선에 끊긴 구간(null)이 있다 — 하락 구간을 이어 그리지 않는다",
+  );
+
+  // 같은 날 두 선이 동시에 값을 가지면 안 된다 (추세는 하나뿐이다).
+  const upAt = new Map(upLine.data.map((p) => [p.date, p.value]));
+  const both = downLine.data.filter((p) => p.value != null && upAt.get(p.date) != null).length;
+  assert(both === 0, `같은 날 두 선이 겹치지 않는다 (겹침 ${both}개)`);
+
+  // 초록은 항상 가격 아래, 빨강은 항상 가격 위.
+  const closeAt = new Map(longBars.map((b) => [b.date, b.close]));
+  const upWrong = upLine.data.filter((p) => p.value != null && p.value > closeAt.get(p.date)!).length;
+  const downWrong = downLine.data.filter((p) => p.value != null && p.value < closeAt.get(p.date)!).length;
+  assert(upWrong === 0, `초록선은 가격 아래 (어긋남 ${upWrong}개)`);
+  assert(downWrong === 0, `빨강선은 가격 위 (어긋남 ${downWrong}개)`);
 
   // 50주선은 30주선·200주선과 다른 선이어야 한다 (period 파싱이 틀리면 같아진다).
   const w50 = plotForSignal("w_ma50", longBars).overlays[0];

@@ -218,7 +218,12 @@ export default function CycleChart({
         crosshairMarkerVisible: false,
       });
       s.setData(
-        line.data.map((p) => ({ time: p.date as unknown as UTCTimestamp, value: p.value })),
+        line.data.map((p) =>
+          p.value == null
+            ? // 값이 없는 날은 whitespace로 넘겨 선을 끊는다. 빼버리면 차트가 이어 그린다.
+              { time: p.date as unknown as UTCTimestamp }
+            : { time: p.date as unknown as UTCTimestamp, value: p.value },
+        ),
       );
       overlayRefs.current.push(s);
     }
@@ -250,7 +255,12 @@ export default function CycleChart({
         lastValueVisible: false,
       });
       s.setData(
-        line.data.map((p) => ({ time: p.date as unknown as UTCTimestamp, value: p.value })),
+        line.data.map((p) =>
+          p.value == null
+            ? // 값이 없는 날은 whitespace로 넘겨 선을 끊는다. 빼버리면 차트가 이어 그린다.
+              { time: p.date as unknown as UTCTimestamp }
+            : { time: p.date as unknown as UTCTimestamp, value: p.value },
+        ),
       );
       first ??= s;
     }
