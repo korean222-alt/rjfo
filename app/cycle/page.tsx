@@ -7,7 +7,7 @@ import CycleSignalTable from "@/components/CycleSignalTable";
 import NavTabs from "@/components/NavTabs";
 import TickerInput from "@/components/TickerInput";
 import TimeframeSelect from "@/components/TimeframeSelect";
-import { SIGNAL_GROUPS } from "@/lib/cycle";
+import { SIGNAL_GROUPS, completedStarts, snapshotOnPct } from "@/lib/cycle";
 import { enrichForPlot, plotForView } from "@/lib/cycle/plot";
 import {
   barsForView,
@@ -203,12 +203,12 @@ export default function CyclePage() {
   }, []);
 
   const completeStarts = useMemo(
-    () => (report ? report.cycleStarts.filter((c) => c.complete) : []),
+    () => (report ? completedStarts(report.cycleStarts, report.now.date) : []),
     [report],
   );
   const avgAtStart = useMemo(() => {
     if (!completeStarts.length) return null;
-    return completeStarts.reduce((a, c) => a + c.onPct, 0) / completeStarts.length;
+    return completeStarts.reduce((a, c) => a + snapshotOnPct(c), 0) / completeStarts.length;
   }, [completeStarts]);
 
   const commonSignals = useMemo(
@@ -377,17 +377,24 @@ export default function CyclePage() {
             </p>
             {report.cycleStarts.length ? (
               <ul className="mt-2 flex flex-wrap gap-1.5">
-                {report.cycleStarts.map((c) => (
+                {report.cycleStarts.map((c, i) => {
+                  const done =
+                    typeof c.complete === "boolean"
+                      ? c.complete
+                      : !(i === report.cycleStarts.length - 1 && c.measuredDate === report.now.date);
+                  const pct = snapshotOnPct(c);
+                  return (
                   <li
                     key={c.troughDate}
                     className={`rounded border border-border bg-bg px-2 py-1 text-[11px] text-muted${
-                      c.complete ? "" : " opacity-50"
+                      done ? "" : " opacity-50"
                     }`}
                   >
-                    {c.troughDate} → {c.on}/{c.total} ({Math.round(c.onPct)}%)
-                    {c.complete ? "" : " (진행중)"}
+                    {c.troughDate} → {c.on}/{c.total} ({Math.round(pct)}%)
+                    {done ? "" : " (진행중)"}
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             ) : null}
           </section>

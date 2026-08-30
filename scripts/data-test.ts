@@ -16,7 +16,7 @@ import { parseStooqCsv, toStooqSymbol } from "../lib/data/stooq";
 import { fetchBarsInBrowser } from "../lib/client-quotes";
 import { BarValidationError, validateBars } from "../lib/validate-bars";
 import { parseTwelveValues, readTwelveResponse } from "../lib/data/twelvedata";
-import { __resetYahooSession } from "../lib/data/yahoo";
+import { __resetYahooSession, applySplitsIfNeeded } from "../lib/data/yahoo";
 import type { Bar } from "../types";
 
 let failures = 0;
@@ -578,6 +578,54 @@ console.log("\n[22] 브라우저 Yahoo가 막히면 Stooq로 폴백");
   restore();
   assert(bars.length === 200, `Stooq 브라우저 경로로 ${bars.length}개`);
   assert(calls.some((u) => u.includes("stooq.com/q/d/l/?s=be.us")), "be.us 로 조회");
+}
+
+console.log("\n[23] 분할 조정 — 정분할/병합, 이미 조정된 시계열은 건드리지 않는다");
+{
+  const dayBars = (closes: number[]): Bar[] => {
+    const t0 = Date.parse("2024-01-01T00:00:00Z");
+    return closes.map((c, i) => ({
+      date: new Date(t0 + i * 86400000).toISOString().slice(0, 10),
+      open: c,
+      high: c,
+      low: c,
+      close: c,
+      volume: 1000,
+    }));
+  };
+  const at = (iso: string) => Date.parse(`${iso}T12:00:00Z`) / 1000;
+
+  const fwdUnadj = applySplitsIfNeeded(
+    dayBars([400, 400, 400, 400, 400, 100, 100, 100, 100, 100]),
+    [{ date: at("2024-01-06"), numerator: 4, denominator: 1 }],
+    "UTC",
+  );
+  assert(fwdUnadj[0].close === 100, `정분할 미조정 과거 종가 1/4 (실제 ${fwdUnadj[0].close})`);
+  assert(fwdUnadj[0].volume === 4000, `정분할 미조정 과거 거래량 ×4 (실제 ${fwdUnadj[0].volume})`);
+  assert(fwdUnadj[5].close === 100, "정분할 당일 종가는 그대로");
+
+  const fwdAdj = applySplitsIfNeeded(
+    dayBars([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]),
+    [{ date: at("2024-01-06"), numerator: 4, denominator: 1 }],
+    "UTC",
+  );
+  assert(fwdAdj[0].close === 100, `정분할 이미 조정이면 그대로 (실제 ${fwdAdj[0].close})`);
+
+  const revUnadj = applySplitsIfNeeded(
+    dayBars([10, 10, 10, 10, 10, 100, 100, 100, 100, 100]),
+    [{ date: at("2024-01-06"), numerator: 1, denominator: 10 }],
+    "UTC",
+  );
+  assert(revUnadj[0].close === 100, `병합 미조정 과거 종가 ×10 (실제 ${revUnadj[0].close})`);
+  assert(revUnadj[0].volume === 100, `병합 미조정 과거 거래량 /10 (실제 ${revUnadj[0].volume})`);
+
+  const revAdj = applySplitsIfNeeded(
+    dayBars([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]),
+    [{ date: at("2024-01-06"), numerator: 1, denominator: 10 }],
+    "UTC",
+  );
+  assert(revAdj[0].close === 100, `병합 이미 조정이면 그대로 (실제 ${revAdj[0].close})`);
+  assert(revAdj[0].volume === 1000, `병합 이미 조정이면 거래량 그대로 (실제 ${revAdj[0].volume})`);
 }
 
 console.log(failures === 0 ? "\n✅ 전부 통과\n" : `\n❌ ${failures}개 실패\n`);
