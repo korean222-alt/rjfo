@@ -233,6 +233,14 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                           ? " 사이클 표본 자체가 적다는 점은 감안하세요."
                           : ""}
                     </p>
+                    {s.chance != null && s.chance >= 0.5 ? (
+                      <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
+                        100%에 가까운 건 계산이 고장 난 게 아니라, 정확도 {num(s.precision, 0, "%")}가
+                        기준선 {num(report.windowSharePct, 0, "%")}와 비슷하거나 낮다는 뜻입니다. 자주 켜지는
+                        지표는 아무 의미가 없어도 상승장 시작 부근에 그만큼은 떨어집니다. 즉 &quot;이 지표엔
+                        추가 정보가 없다&quot;는 판정입니다.
+                      </p>
+                    ) : null}
                     <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
                       과거 상승장 시작 {report.cycles.length}번 중{" "}
                       <b className="text-white">{s.hitCount}번</b>을 잡았습니다 (적중률{" "}

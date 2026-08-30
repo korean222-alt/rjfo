@@ -9,7 +9,13 @@
 import { enrich } from "../lib/indicators";
 import { analyzeCycle } from "../lib/cycle";
 import { findCycles, findPivots } from "../lib/cycle/regime";
-import { eventIndices } from "../lib/cycle/evaluate";
+import {
+  baselineStats,
+  binomTailGe,
+  cycleWindowShare,
+  evaluateSignal,
+  eventIndices,
+} from "../lib/cycle/evaluate";
 import { toMonthly, toWeekly, projectToDaily, barsForView, snapDatesToView } from "../lib/cycle/resample";
 import { ema, macd, rsi, sma } from "../lib/cycle/ta";
 import { narrate } from "../lib/cycle/narrative";
@@ -175,6 +181,60 @@ console.log("\n[5] 신호 발생일 = 상태의 상승 엣지");
   spaced[20] = true;
   const ev2 = eventIndices(spaced);
   assert(ev2.length === 2, `충분히 떨어진 신호는 각각 센다 (실제 ${ev2.length})`);
+}
+
+// ── 5b. 정확도·우연일 확률은 창 안 신호를 전부 센다 ────────────────
+//
+// 예전엔 사이클마다 대표 신호 하나씩만 셌다. 그러면 셀 수 있는 최댓값이 사이클 수로
+// 막혀서, 자주 켜지는 지표는 창 안에 몇 번을 떨어지든 정확도가 바닥으로 나오고
+// 우연일 확률이 무조건 100%가 됐다. 이항검정의 귀무가설과 관측값을 같은 방식으로
+// 세는지 확인한다.
+console.log("\n[5b] 정확도·우연: 창 안 신호를 전부 센다");
+{
+  const win = { before: 20, after: 150 };
+  const n = 1000;
+  const bars = enrich(barsFromCloses(new Array(n).fill(0).map((_, i) => 100 + i)));
+  // 바닥 하나. 창은 idx 280~450 (171봉).
+  const cycles = [
+    {
+      troughIdx: 300,
+      troughDate: bars[300].date,
+      troughClose: bars[300].close,
+      nextPeakIdx: 999,
+      nextPeakDate: bars[999].date,
+      nextPeakClose: bars[999].close,
+      gainPct: 100,
+      drawdownPct: -50,
+      peakIdx: 0,
+      peakDate: bars[0].date,
+      peakClose: bars[0].close,
+    },
+  ] as unknown as Parameters<typeof evaluateSignal>[2];
+
+  const share = cycleWindowShare(n, cycles as never, win);
+  approx(share, 171 / n, 0.002, "창 비율");
+
+  // 창 안에서 20봉마다 한 번씩(=8번) 켜지고, 창 밖에서 2번 켜지는 지표.
+  const state: (boolean | null)[] = new Array(n).fill(false);
+  const on = (i: number) => {
+    state[i] = true;
+    state[i + 1] = true;
+  };
+  for (let i = 290; i <= 430; i += 20) on(i); // 8번, 전부 창 안
+  on(100);
+  on(700); // 2번, 창 밖
+  const series = { key: "t", label: "t", group: "추세" as const, why: "", timeframe: "일봉" as const, state };
+
+  const ev = evaluateSignal(bars, series, cycles as never, baselineStats(bars), share, { window: win });
+  assert(ev.eventCount === 10, `신호 10회 (실제 ${ev.eventCount})`);
+  approx(ev.precision, 80, 0.01, "정확도 = 창 안 8 / 전체 10");
+  assert(ev.falseAlarms === 2, `오탐 2회 (실제 ${ev.falseAlarms})`);
+  assert(ev.hitCount === 1, `사이클 적중은 여전히 1/1 (실제 ${ev.hitCount})`);
+  approx(ev.chance, binomTailGe(8, 10, share), 1e-12, "우연일 확률 = P(X≥8 | n=10)");
+  assert(
+    (ev.chance ?? 1) < 0.001,
+    `창 안에 몰린 지표는 우연일 확률이 낮아야 한다 (실제 ${((ev.chance ?? 1) * 100).toFixed(3)}%)`,
+  );
 }
 
 // ── 6. 전체 파이프라인 스모크 ─────────────────────────────────────

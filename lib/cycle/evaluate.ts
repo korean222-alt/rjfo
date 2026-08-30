@@ -202,7 +202,10 @@ export function evaluateSignal(
   const events = eventIndices(signal.state);
   const lastIdx = bars.length - 1;
 
-  const matchedEvents = new Set<number>();
+  // 정확도·우연 계산에 쓰는 '창 안' 마스크. 사이클마다 대표 신호 하나만 세면
+  // 창 안에 100번 떨어진 지표도 사이클 수(4~7)까지밖에 못 센다 — 아래 주석 참고.
+  const inWindow = cycleWindowMask(bars.length, cycles, win);
+
   const cycleHits: CycleHit[] = cycles.map((cycle) => {
     const lo = cycle.troughIdx - win.before;
     const hi = cycle.troughIdx + win.after;
@@ -211,7 +214,6 @@ export function evaluateSignal(
     if (hit == null) {
       return { troughDate: cycle.troughDate, eventDate: null, leadDays: null, captureSharePct: null };
     }
-    matchedEvents.add(hit);
 
     const span = cycle.nextPeakClose - cycle.troughClose;
     const remaining = cycle.nextPeakClose - bars[hit].close;
@@ -225,12 +227,23 @@ export function evaluateSignal(
 
   const hits = cycleHits.filter((h) => h.eventDate != null);
   const hitRate = cycles.length ? (hits.length / cycles.length) * 100 : null;
-  const falseAlarms = events.length - matchedEvents.size;
-  const precision = events.length ? (matchedEvents.size / events.length) * 100 : null;
+
+  /*
+   * 정확도·우연은 '창 안에 떨어진 신호 전부'로 센다. 사이클마다 대표 신호 하나씩만
+   * 세면 안 된다. 그러면 셀 수 있는 최댓값이 사이클 수(4~7)로 막혀서, 자주 켜지는
+   * 지표일수록 손해를 본다: 신호 434번 중 73번이 창 안에 떨어져도 4번으로 세니
+   * 정확도가 17%가 아니라 1%로 나오고, 이항검정도 P(X≥4 | n=434)를 묻게 되어
+   * 우연일 확률이 무조건 100%가 된다. 아래 이항검정의 귀무가설이 "아무 데나
+   * eventCount번 찍으면 몇 번이 창 안에 떨어지나"이므로, 관측값도 같은 방식으로
+   * 세야 앞뒤가 맞는다.
+   */
+  const inWindowCount = events.reduce((acc, i) => acc + (inWindow[i] ? 1 : 0), 0);
+  const falseAlarms = events.length - inWindowCount;
+  const precision = events.length ? (inWindowCount / events.length) * 100 : null;
   const lift = precision != null && windowShare > 0 ? precision / 100 / windowShare : null;
   const chance =
     events.length && windowShare > 0 && windowShare < 1
-      ? binomTailGe(matchedEvents.size, events.length, windowShare)
+      ? binomTailGe(inWindowCount, events.length, windowShare)
       : null;
 
   const forward: Record<string, ForwardStat> = {};
@@ -291,10 +304,28 @@ export function baselineStats(bars: EnrichedBar[]): Record<string, ForwardStat> 
 }
 
 /**
- * 전체 봉 중 '상승장 시작 부근'(사이클 창)이 차지하는 비율.
+ * 각 봉이 '상승장 시작 부근'(사이클 창) 안인지 표시한 마스크.
  *
- * 창끼리 겹칠 수 있어서 합집합으로 센다. 겹친 걸 두 번 세면 분모가 부풀어
+ * 창끼리 겹칠 수 있어서 합집합으로 만든다. 겹친 걸 두 번 세면 분모가 부풀어
  * 모든 지표의 lift가 실제보다 낮게 나온다.
+ */
+export function cycleWindowMask(
+  barCount: number,
+  cycles: Cycle[],
+  win: MatchWindow = DEFAULT_WINDOW,
+): Uint8Array {
+  const covered = new Uint8Array(Math.max(0, barCount));
+  for (const c of cycles) {
+    const lo = Math.max(0, c.troughIdx - win.before);
+    const hi = Math.min(barCount - 1, c.troughIdx + win.after);
+    for (let i = lo; i <= hi; i++) covered[i] = 1;
+  }
+  return covered;
+}
+
+/**
+ * 전체 봉 중 '상승장 시작 부근'이 차지하는 비율. lift의 분모이자 이항검정의 p.
+ * 지표를 채점할 때 쓰는 마스크와 같은 마스크로 세야 둘이 어긋나지 않는다.
  */
 export function cycleWindowShare(
   barCount: number,
@@ -302,12 +333,7 @@ export function cycleWindowShare(
   win: MatchWindow = DEFAULT_WINDOW,
 ): number {
   if (barCount <= 0 || !cycles.length) return 0;
-  const covered = new Uint8Array(barCount);
-  for (const c of cycles) {
-    const lo = Math.max(0, c.troughIdx - win.before);
-    const hi = Math.min(barCount - 1, c.troughIdx + win.after);
-    for (let i = lo; i <= hi; i++) covered[i] = 1;
-  }
+  const covered = cycleWindowMask(barCount, cycles, win);
   let n = 0;
   for (let i = 0; i < barCount; i++) n += covered[i];
   return n / barCount;
