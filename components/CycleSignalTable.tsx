@@ -4,15 +4,29 @@ import { useMemo, useState } from "react";
 import { HORIZON_LABELS, HORIZONS, SIGNAL_GROUPS } from "@/lib/cycle";
 import type { CycleReport, SignalEvaluation } from "@/lib/cycle";
 
-type SortKey = "score" | "hitRate" | "lead" | "edge" | "lift";
+type SortKey = "score" | "hitRate" | "lead" | "edge" | "lift" | "chance";
 
 const SORTS: { key: SortKey; label: string; hint: string }[] = [
   { key: "score", label: "종합", hint: "적중률·정확도·남은 상승을 섞은 순위" },
+  { key: "chance", label: "우연 아닌 순", hint: "아무 데나 같은 횟수만큼 찍어도 이만큼 맞을 확률이 낮은 순" },
   { key: "hitRate", label: "적중률", hint: "과거 상승장 시작을 몇 번 잡았나" },
   { key: "lead", label: "빠른 순", hint: "바닥 대비 얼마나 일찍 떴나" },
   { key: "edge", label: "기저율 대비", hint: "아무 날이나 샀을 때보다 얼마나 나았나" },
   { key: "lift", label: "우연대비", hint: "아무 날이나 찍었을 때보다 몇 배 자주 상승장 시작을 가리켰나" },
 ];
+
+/**
+ * 우연일 확률을 사람이 읽는 말로.
+ * 숫자만 주면 0.03과 0.30의 차이를 눈으로 못 읽는다 — 색과 문구를 같이 준다.
+ */
+function chanceText(p: number | null | undefined): { text: string; tone: string } {
+  if (p == null || !Number.isFinite(p)) return { text: "우연일 확률 —", tone: "text-muted" };
+  const pct = p * 100;
+  const shown = pct < 0.1 ? "0.1% 미만" : `${pct < 10 ? pct.toFixed(1) : pct.toFixed(0)}%`;
+  if (p < 0.05) return { text: `우연일 확률 ${shown}`, tone: "text-up" };
+  if (p < 0.2) return { text: `우연일 확률 ${shown}`, tone: "" };
+  return { text: `우연일 확률 ${shown}`, tone: "text-down" };
+}
 
 function num(n: number | null | undefined, digits = 0, suffix = ""): string {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -62,11 +76,14 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
           return s.edge ?? Number.NEGATIVE_INFINITY;
         case "lift":
           return s.lift ?? -1;
+        case "chance":
+          // 낮을수록 위. 신호가 없어 못 재는 지표는 맨 뒤로.
+          return s.chance ?? Number.POSITIVE_INFINITY;
         default:
           return s.score;
       }
     };
-    const asc = sort === "lead";
+    const asc = sort === "lead" || sort === "chance";
     return [...filtered].sort((a, b) => (asc ? value(a) - value(b) : value(b) - value(a)));
   }, [report.signals, sort, group, onlyOn]);
 
@@ -124,7 +141,9 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
         남은상승 = 신호 시점에 그 사이클 상승분이 얼마나 남아 있었나 ·{" "}
         <b className="text-white">우연대비</b> = 아무 날이나 찍었을 때 대비 배수(1.0이면 우연과 같음, 전체 기간의{" "}
         {num(report.windowSharePct, 0, "%")}가 상승장 시작 부근) · 기저대비 = 신호 후 1년 수익률 − 아무 날이나
-        골랐을 때(연 {num(report.baseline["250"].avg, 0, "%")})
+        골랐을 때(연 {num(report.baseline["250"].avg, 0, "%")}) ·{" "}
+        <b className="text-white">우연일 확률</b> = 아무 데나 같은 횟수만큼 찍는 가짜 지표가 이만큼 맞을 확률
+        (낮을수록 좋고, 5% 미만이면 우연으로 보기 어렵습니다)
       </p>
 
       <ul className="mt-3 space-y-1.5">
@@ -163,6 +182,7 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                     우연대비 {num(s.lift, 1, "배")}
                   </span>
                   <span className={toneFor(s.edge)}>기저대비 {signed(s.edge, 0, "%p")}</span>
+                  <span className={chanceText(s.chance).tone}>{chanceText(s.chance).text}</span>
                 </div>
               </button>
 
@@ -189,6 +209,35 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                         </li>
                       ))}
                     </ul>
+                  </div>
+
+                  <div className="rounded-lg border border-border bg-surface px-2.5 py-2">
+                    <p className="text-[11px] font-semibold">이게 우연일까?</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-muted">
+                      이 지표는 전체 기간에 <b className="text-white">{s.eventCount}번</b> 떴고, 그중{" "}
+                      <b className="text-white">{s.eventCount - s.falseAlarms}번</b>이 상승장 시작 부근이었습니다
+                      (정확도 {num(s.precision, 0, "%")}). 상승장 시작 부근은 전체 기간의{" "}
+                      {num(report.windowSharePct, 0, "%")}뿐이니, 아무 데나 {s.eventCount}번 찍는 가짜 지표가 이만큼
+                      맞을 확률은{" "}
+                      <b className={chanceText(s.chance).tone || "text-white"}>
+                        {s.chance == null
+                          ? "—"
+                          : s.chance < 0.001
+                            ? "0.1% 미만"
+                            : `${(s.chance * 100).toFixed(s.chance < 0.1 ? 1 : 0)}%`}
+                      </b>
+                      입니다.
+                      {s.chance != null && s.chance >= 0.05
+                        ? " 5%를 넘으므로 우연으로도 충분히 나올 수 있는 성적입니다."
+                        : s.chance != null
+                          ? " 사이클 표본 자체가 적다는 점은 감안하세요."
+                          : ""}
+                    </p>
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
+                      과거 상승장 시작 {report.cycles.length}번 중{" "}
+                      <b className="text-white">{s.hitCount}번</b>을 잡았습니다 (적중률{" "}
+                      {num(s.hitRate, 0, "%")}).
+                    </p>
                   </div>
 
                   <div>

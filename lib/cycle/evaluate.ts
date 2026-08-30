@@ -7,6 +7,7 @@
  *   남은 상승 — 신호가 떴을 때 그 사이클 상승분의 몇 %가 아직 남아 있었나
  *   정확도   — 전체 신호 중 상승장 시작 부근이었던 비율 (오탐의 반대)
  *   기저율 대비 — 신호 이후 수익률 − 아무 날이나 골랐을 때의 수익률
+ *   우연일 확률 — 아무 데나 같은 횟수만큼 찍어도 이만큼 맞을 확률 (이항 검정)
  *
  * 마지막 항목이 제일 중요하다. 원래 우상향인 자산은 아무 날이나 사도 승률이 높다.
  * 기저율을 안 빼면 모든 지표가 훌륭해 보인다.
@@ -74,6 +75,20 @@ export type SignalEvaluation = SignalDef & {
    * 1.0 미만이면 오히려 상승장 시작을 덜 가리킨다.
    */
   lift: number | null;
+  /**
+   * 우연일 확률 (p-value). 0~1.
+   *
+   * lift만으로는 못 믿는다. 신호가 딱 2번 떴는데 둘 다 맞으면 lift는 하늘을 찌르지만
+   * 동전 두 번 던져 앞면 두 번 나온 것과 다르지 않다. 표본 수를 같이 봐야 한다.
+   *
+   * 그래서 이렇게 묻는다: "아무 데나 eventCount번 찍는 가짜 지표가, 이 지표만큼
+   * (또는 그보다 더) 상승장 시작 부근을 맞힐 확률은?" 각 신호가 전체 기간에 고르게
+   * 떨어진다고 보면 상승장 시작 부근에 떨어질 확률이 windowShare이므로,
+   * 이항분포 B(eventCount, windowShare)의 꼬리 확률이 그 답이다.
+   *
+   * 0.05면 "우연히 이 정도가 나올 일이 20번에 한 번"이라는 뜻이다. 낮을수록 좋다.
+   */
+  chance: number | null;
   forward: Record<string, ForwardStat>;
   /** 1년 뒤 평균 수익률 − 기저율. 이게 음수면 신호가 있으나 마나다. */
   edge: number | null;
@@ -115,6 +130,44 @@ function statsAt(bars: EnrichedBar[], indices: number[], horizon: number): Forwa
     median: median(rets),
     winRate: rets.length ? (rets.filter((r) => r > 0).length / rets.length) * 100 : null,
   };
+}
+
+/**
+ * P(X ≥ k), X ~ 이항분포 B(n, p). 근사 없이 항을 다 더한다.
+ *
+ * 표본이 작을 때(사이클 5~7번, 신호 몇 번)가 정확히 이 앱의 상황이라, 정규근사를 쓰면
+ * 확률이 눈에 띄게 틀어진다. n은 커봐야 수백이므로 그냥 정확히 계산하는 게 낫다.
+ *
+ * 각 항을 로그로 만들어 더한다. (1-p)^n 같은 값은 n이 조금만 커져도 0으로 언더플로하고,
+ * 조합 C(n,i)는 반대로 오버플로한다. 로그 공간에서는 둘 다 일어나지 않는다.
+ */
+export function binomTailGe(k: number, n: number, p: number): number {
+  if (!Number.isFinite(n) || n <= 0 || !Number.isFinite(k)) return 1;
+  if (k <= 0) return 1;
+  if (k > n) return 0;
+  if (!(p > 0)) return 0;
+  if (p >= 1) return 1;
+
+  // 로그 팩토리얼 누적표.
+  const logFact = new Float64Array(n + 1);
+  for (let i = 1; i <= n; i++) logFact[i] = logFact[i - 1] + Math.log(i);
+
+  const lp = Math.log(p);
+  const lq = Math.log1p(-p);
+
+  // 가장 큰 항을 빼고 더한 뒤 되돌린다 (log-sum-exp).
+  const terms: number[] = [];
+  let max = -Infinity;
+  for (let i = Math.ceil(k); i <= n; i++) {
+    const t = logFact[n] - logFact[i] - logFact[n - i] + i * lp + (n - i) * lq;
+    terms.push(t);
+    if (t > max) max = t;
+  }
+  if (!Number.isFinite(max)) return 0;
+
+  let sum = 0;
+  for (const t of terms) sum += Math.exp(t - max);
+  return Math.min(1, Math.exp(max) * sum);
 }
 
 /** 상태 배열의 상승 엣지(꺼짐→켜짐)를 신호 발생일로 본다. 깜빡임은 묶는다. */
@@ -175,6 +228,10 @@ export function evaluateSignal(
   const falseAlarms = events.length - matchedEvents.size;
   const precision = events.length ? (matchedEvents.size / events.length) * 100 : null;
   const lift = precision != null && windowShare > 0 ? precision / 100 / windowShare : null;
+  const chance =
+    events.length && windowShare > 0 && windowShare < 1
+      ? binomTailGe(matchedEvents.size, events.length, windowShare)
+      : null;
 
   const forward: Record<string, ForwardStat> = {};
   for (const h of HORIZONS) forward[String(h)] = statsAt(bars, events, h);
@@ -216,6 +273,7 @@ export function evaluateSignal(
     falseAlarms,
     precision,
     lift,
+    chance,
     forward,
     edge,
     currentlyOn,

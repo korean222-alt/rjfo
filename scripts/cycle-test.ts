@@ -429,6 +429,8 @@ if (ticker) {
           ` 리드 ${String(s.medianLeadDays ?? "—").padStart(4)}일` +
           ` 남은상승 ${(s.medianCaptureSharePct?.toFixed(0) ?? "—").padStart(3)}%` +
           ` 정확도 ${(s.precision?.toFixed(0) ?? "—").padStart(3)}%` +
+          ` 신호 ${String(s.eventCount).padStart(3)}회` +
+          ` 우연 ${(s.chance == null ? "—" : (s.chance * 100).toFixed(1)).padStart(5)}%` +
           ` 1년 ${(s.forward["250"].avg?.toFixed(0) ?? "—").padStart(5)}%` +
           ` 기저대비 ${(s.edge?.toFixed(0) ?? "—").padStart(5)}%p` +
           ` ${s.currentlyOn ? "🟢" : "⚪"}`,
