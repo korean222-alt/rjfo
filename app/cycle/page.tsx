@@ -264,7 +264,7 @@ export default function CyclePage() {
             <div className="space-y-3 border-t border-border px-4 py-3">
               <p className="text-[11px] leading-relaxed text-muted">
                 고점 대비 <b>하락 기준</b>만큼 빠진 뒤, 저점 대비 <b>반등 기준</b>만큼 오른 그 저점을
-                상승장 시작으로 봅니다. 코인은 기본 -40%/+50%, 주식은 -20%/+25%입니다. 기준을 낮추면
+                상승장 시작으로 봅니다. 코인은 기본 -40%/+80%, 주식은 -20%/+40%입니다. 기준을 낮추면
                 사이클 수가 늘지만 잔파동까지 상승장으로 세게 됩니다.
               </p>
               <label className="block text-xs text-muted">

@@ -137,8 +137,8 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
       </div>
 
       <p className="mt-3 text-[11px] leading-relaxed text-muted">
-        적중률 = 과거 상승장 시작 {report.cycles.length}번 중 잡은 횟수 · 리드 = 실제 바닥 대비 신호 시점 ·
-        남은상승 = 신호 시점에 그 사이클 상승분이 얼마나 남아 있었나 ·{" "}
+        적중률 = 과거 상승장 시작 {report.cycles.length}번 중 바닥 당시 켜져 있었거나 직후 창에서 켜진 횟수 · 리드 = 실제 바닥 대비 신호 시점 ·
+        남은상승 = 새로 켜진 시점에 그 사이클 상승분이 얼마나 남아 있었나 ·{" "}
         <b className="text-white">우연대비</b> = 아무 날이나 찍었을 때 대비 배수(1.0이면 우연과 같음, 전체 기간의{" "}
         {num(report.windowSharePct, 0, "%")}가 상승장 시작 부근) · 기저대비 = 신호 후 1년 수익률 − 아무 날이나
         골랐을 때(연 {num(report.baseline["250"].avg, 0, "%")}) ·{" "}
@@ -200,7 +200,11 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                             <>
                               <span className="text-up">{h.eventDate}</span>
                               <span className="text-muted">
-                                ({leadText(h.leadDays)}, 남은 상승 {num(h.captureSharePct, 0, "%")})
+                                (
+                                {h.alreadyOn
+                                  ? "바닥 당시 이미 켜짐"
+                                  : `${leadText(h.leadDays)}, 남은 상승 ${num(h.captureSharePct, 0, "%")}`}
+                                )
                               </span>
                             </>
                           ) : (
