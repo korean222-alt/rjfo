@@ -120,17 +120,27 @@ export function snapDatesToView(dates: string[], daily: Bar[], tf: ChartTf): str
 /**
  * 기간 단위로 계산한 값을 일봉 타임라인에 되돌린다.
  *
- * 일봉 i에는 '직전에 완전히 마감된' 기간의 값만 붙인다. 진행 중인 주/월의 값은
- * 그 시점에 알 수 없으므로 쓰지 않는다.
+ * 일봉 i에는 '그 시점에 이미 알 수 있는' 기간의 값만 붙인다. 주 중간이면 직전 주,
+ * 그 주의 마지막 거래일이면 그 주 자신이다. 주봉 종가는 그날 종가와 같으므로
+ * 마감일 당일에 그 주의 값을 쓰는 건 미래를 보는 게 아니다.
+ *
+ * 마감일까지 직전 주 값을 쓰면 화면이 최대 2주 뒤처진다. 차트에는 이미 30주선
+ * 아래로 내려온 게 보이는데 "30주선 위 = 켜짐"이라고 뜨는 게 그 증상이었다.
+ *
+ * 데이터의 마지막 봉은 그 주가 끝났는지 알 수 없지만, 진행 중인 주를 지금 종가로
+ * 마감한 셈 치고 쓴다. 차트가 그리는 값과 같아지고, '지금 켜짐/꺼짐'이 눈에 보이는
+ * 것과 일치한다.
  */
 export function projectToDaily<T>(
   periodOf: number[],
   periodValues: (T | null)[],
   fallback: T | null = null,
 ): (T | null)[] {
-  return periodOf.map((p) => {
-    const prev = p - 1;
-    if (prev < 0 || prev >= periodValues.length) return fallback;
-    return periodValues[prev] ?? fallback;
+  const last = periodOf.length - 1;
+  return periodOf.map((p, i) => {
+    const closed = i === last || periodOf[i + 1] !== p;
+    const src = closed ? p : p - 1;
+    if (src < 0 || src >= periodValues.length) return fallback;
+    return periodValues[src] ?? fallback;
   });
 }

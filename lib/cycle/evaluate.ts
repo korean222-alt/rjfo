@@ -38,6 +38,29 @@ export type MatchWindow = {
 /** 이 지표들은 대부분 '확인형'이라 바닥보다 늦게 뜬다. 뒤쪽 창을 넉넉히 잡는다. */
 export const DEFAULT_WINDOW: MatchWindow = { before: 20, after: 150 };
 
+/**
+ * 사이클 하나의 '상승장 시작 부근' 구간.
+ *
+ * 창을 그 사이클의 직전 고점과 다음 고점 사이로 자른다. 이게 없으면 창이 다음
+ * 하락장까지 넘어가서, 아이온큐처럼 사이클이 잦은 종목에서 창의 합집합이 전체
+ * 기간의 77%를 덮어버린다. 그렇게 되면 아무 지표나 다 정확도 ~77%가 나오고
+ * 우연대비는 1.0배로 붙박이가 되어 검정 자체가 성립하지 않는다.
+ *
+ * 자르는 기준이 자의적이지 않은 이유: 다음 고점을 지난 날은 정의상 '상승장 시작
+ * 부근'이 아니라 이미 하락 국면이다. 직전 고점 이전도 마찬가지로 이전 사이클이다.
+ */
+export function cycleWindow(
+  cycle: Cycle,
+  barCount: number,
+  win: MatchWindow = DEFAULT_WINDOW,
+): { lo: number; hi: number } {
+  const floor = cycle.peakIdx == null ? 0 : cycle.peakIdx + 1;
+  const ceil = cycle.nextPeakIdx ?? barCount - 1;
+  const lo = Math.max(0, floor, cycle.troughIdx - win.before);
+  const hi = Math.min(barCount - 1, ceil, cycle.troughIdx + win.after);
+  return { lo, hi: Math.max(lo, hi) };
+}
+
 /** 같은 신호가 며칠 안에 여러 번 깜빡이면 하나로 센다. */
 const EVENT_CLUSTER_DAYS = 5;
 
@@ -207,8 +230,7 @@ export function evaluateSignal(
   const inWindow = cycleWindowMask(bars.length, cycles, win);
 
   const cycleHits: CycleHit[] = cycles.map((cycle) => {
-    const lo = cycle.troughIdx - win.before;
-    const hi = cycle.troughIdx + win.after;
+    const { lo, hi } = cycleWindow(cycle, bars.length, win);
     // 창 안에서 가장 먼저 뜬 신호를 그 사이클의 대표로 삼는다.
     const hit = events.find((e) => e >= lo && e <= hi);
     if (hit == null) {
@@ -316,8 +338,7 @@ export function cycleWindowMask(
 ): Uint8Array {
   const covered = new Uint8Array(Math.max(0, barCount));
   for (const c of cycles) {
-    const lo = Math.max(0, c.troughIdx - win.before);
-    const hi = Math.min(barCount - 1, c.troughIdx + win.after);
+    const { lo, hi } = cycleWindow(c, barCount, win);
     for (let i = lo; i <= hi; i++) covered[i] = 1;
   }
   return covered;

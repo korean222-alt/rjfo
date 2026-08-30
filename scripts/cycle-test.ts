@@ -12,6 +12,7 @@ import { findCycles, findPivots } from "../lib/cycle/regime";
 import {
   baselineStats,
   binomTailGe,
+  cycleWindow,
   cycleWindowShare,
   evaluateSignal,
   eventIndices,
@@ -154,15 +155,24 @@ console.log("\n[4] 주봉/월봉 미래 참조 방지");
   const lastOfFirstWeek = bars.filter((_, i) => w.periodOf[i] === 0).at(-1)!;
   approx(w.bars[0].close, lastOfFirstWeek.close, 1e-9, "주봉 종가 = 그 주 마지막 일봉 종가");
 
-  // projectToDaily는 '직전에 마감된' 주의 값만 준다.
+  // projectToDaily는 '그 시점에 알 수 있는' 주의 값을 준다.
   const periodState = w.bars.map((_, i) => i);
   const daily = projectToDaily(w.periodOf, periodState, null);
   const firstWeekIdx = w.periodOf.findIndex((p) => p === 0);
-  assert(daily[firstWeekIdx] === null, "첫 주에는 직전 주가 없어 null");
+  assert(daily[firstWeekIdx] === null, "첫 주 중간에는 직전 주가 없어 null");
   const secondWeekStart = w.periodOf.findIndex((p) => p === 1);
-  assert(daily[secondWeekStart] === 0, "둘째 주에는 첫 주(마감된 주)의 값이 붙는다");
+  assert(daily[secondWeekStart] === 0, "주 중간에는 직전 주(마감된 주)의 값이 붙는다");
+  // 주 마지막 거래일에는 그 주 종가 = 그날 종가라서 그 주의 값을 이미 안다.
+  const firstWeekEnd = w.periodOf.lastIndexOf(0);
+  assert(daily[firstWeekEnd] === 0, "주 마지막 날에는 그 주 값이 붙는다 (그날 종가 = 주봉 종가)");
   const secondWeekEnd = w.periodOf.lastIndexOf(1);
-  assert(daily[secondWeekEnd] === 0, "둘째 주 마지막 날에도 여전히 첫 주 값 (진행 중인 주를 안 씀)");
+  assert(daily[secondWeekEnd] === 1, "둘째 주 마지막 날에는 둘째 주 값");
+  // 미래 참조 방지: 주 마지막 날 전에는 절대 그 주의 값이 새어 들어오면 안 된다.
+  const midOfSecond = w.periodOf.findIndex((p) => p === 1) + 1;
+  assert(
+    w.periodOf[midOfSecond] !== 1 || daily[midOfSecond] === 0,
+    "주 중간에 그 주의 값이 새어 들어오지 않는다",
+  );
 
   const mo = toMonthly(bars);
   assert(mo.bars.length >= 2, `월봉 ${mo.bars.length}개 생성`);
@@ -234,6 +244,48 @@ console.log("\n[5b] 정확도·우연: 창 안 신호를 전부 센다");
   assert(
     (ev.chance ?? 1) < 0.001,
     `창 안에 몰린 지표는 우연일 확률이 낮아야 한다 (실제 ${((ev.chance ?? 1) * 100).toFixed(3)}%)`,
+  );
+}
+
+// ── 5c. 창은 직전 고점 ~ 다음 고점 사이로 잘린다 ────────────────────
+//
+// 이게 없으면 사이클이 잦은 종목에서 창의 합집합이 전체 기간을 거의 다 덮는다.
+// 그러면 아무 지표나 정확도가 기준선에 붙어 우연대비 1.0배가 되고, 검정이 죽는다.
+console.log("\n[5c] 창 자르기");
+{
+  // 짧은 사이클이 연달아 오는 시계열: 100 → 200 → 130 → 260 → 170 → 340
+  const closes: number[] = [100];
+  const ramp = (from: number, to: number, days: number) => {
+    for (let i = 1; i <= days; i++) closes.push(from + ((to - from) * i) / days);
+  };
+  ramp(100, 200, 60);
+  ramp(200, 130, 40); // 바닥 idx 100
+  ramp(130, 260, 60); // 고점 idx 160
+  ramp(260, 170, 40); // 바닥 idx 200
+  ramp(170, 340, 60);
+
+  const bars = barsFromCloses(closes);
+  const t = { bearPct: 30, bullPct: 30 };
+  const cycles = findCycles(bars, t);
+  assert(cycles.length === 2, `사이클 2개 (실제 ${cycles.length})`);
+
+  const win = { before: 20, after: 150 };
+  const w0 = cycleWindow(cycles[0], bars.length, win);
+  // 자르지 않으면 100+150=250까지 뻗어 둘째 사이클을 통째로 삼킨다.
+  assert(w0.hi === cycles[0].nextPeakIdx, `첫 창은 다음 고점(idx ${cycles[0].nextPeakIdx})에서 끊긴다 (실제 ${w0.hi})`);
+  assert(w0.hi < cycles[1].troughIdx, "첫 창이 둘째 바닥까지 삼키지 않는다");
+  assert(w0.lo > (cycles[0].peakIdx ?? -1), "창이 직전 고점 이전으로 내려가지 않는다");
+
+  const shareClipped = cycleWindowShare(bars.length, cycles, win);
+  let raw = 0;
+  const cov = new Uint8Array(bars.length);
+  for (const c of cycles)
+    for (let i = Math.max(0, c.troughIdx - win.before); i <= Math.min(bars.length - 1, c.troughIdx + win.after); i++)
+      cov[i] = 1;
+  for (let i = 0; i < bars.length; i++) raw += cov[i];
+  assert(
+    shareClipped < raw / bars.length,
+    `자른 창이 더 좁다 (${(shareClipped * 100).toFixed(0)}% < ${((raw / bars.length) * 100).toFixed(0)}%)`,
   );
 }
 

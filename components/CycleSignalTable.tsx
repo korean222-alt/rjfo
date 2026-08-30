@@ -15,6 +15,17 @@ const SORTS: { key: SortKey; label: string; hint: string }[] = [
   { key: "lift", label: "우연대비", hint: "아무 날이나 찍었을 때보다 몇 배 자주 상승장 시작을 가리켰나" },
 ];
 
+/** 우연일 확률의 색 기준. 20% 미만 초록 / 50% 이상 빨강 / 그 사이는 회색. */
+export const CHANCE_GOOD = 0.2;
+export const CHANCE_BAD = 0.5;
+
+function chanceTone(p: number | null | undefined): string {
+  if (p == null || !Number.isFinite(p)) return "text-muted";
+  if (p < CHANCE_GOOD) return "text-up";
+  if (p >= CHANCE_BAD) return "text-down";
+  return "text-muted";
+}
+
 /**
  * 우연일 확률을 사람이 읽는 말로.
  * 숫자만 주면 0.03과 0.30의 차이를 눈으로 못 읽는다 — 색과 문구를 같이 준다.
@@ -23,9 +34,7 @@ function chanceText(p: number | null | undefined): { text: string; tone: string 
   if (p == null || !Number.isFinite(p)) return { text: "우연일 확률 —", tone: "text-muted" };
   const pct = p * 100;
   const shown = pct < 0.1 ? "0.1% 미만" : `${pct < 10 ? pct.toFixed(1) : pct.toFixed(0)}%`;
-  if (p < 0.05) return { text: `우연일 확률 ${shown}`, tone: "text-up" };
-  if (p < 0.2) return { text: `우연일 확률 ${shown}`, tone: "" };
-  return { text: `우연일 확률 ${shown}`, tone: "text-down" };
+  return { text: `우연일 확률 ${shown}`, tone: chanceTone(p) };
 }
 
 function num(n: number | null | undefined, digits = 0, suffix = ""): string {
@@ -143,7 +152,8 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
         {num(report.windowSharePct, 0, "%")}가 상승장 시작 부근) · 기저대비 = 신호 후 1년 수익률 − 아무 날이나
         골랐을 때(연 {num(report.baseline["250"].avg, 0, "%")}) ·{" "}
         <b className="text-white">우연일 확률</b> = 아무 데나 같은 횟수만큼 찍는 가짜 지표가 이만큼 맞을 확률
-        (낮을수록 좋고, 5% 미만이면 우연으로 보기 어렵습니다)
+        (낮을수록 좋습니다: <b className="text-up">20% 미만 초록</b> · 20~50% 회색 ·{" "}
+        <b className="text-down">50% 이상 빨강</b>)
       </p>
 
       <ul className="mt-3 space-y-1.5">
@@ -219,7 +229,7 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                       (정확도 {num(s.precision, 0, "%")}). 상승장 시작 부근은 전체 기간의{" "}
                       {num(report.windowSharePct, 0, "%")}뿐이니, 아무 데나 {s.eventCount}번 찍는 가짜 지표가 이만큼
                       맞을 확률은{" "}
-                      <b className={chanceText(s.chance).tone || "text-white"}>
+                      <b className={chanceTone(s.chance)}>
                         {s.chance == null
                           ? "—"
                           : s.chance < 0.001
@@ -227,18 +237,22 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                             : `${(s.chance * 100).toFixed(s.chance < 0.1 ? 1 : 0)}%`}
                       </b>
                       입니다.
-                      {s.chance != null && s.chance >= 0.05
-                        ? " 5%를 넘으므로 우연으로도 충분히 나올 수 있는 성적입니다."
-                        : s.chance != null
-                          ? " 사이클 표본 자체가 적다는 점은 감안하세요."
-                          : ""}
+                      {s.chance == null
+                        ? ""
+                        : s.chance >= CHANCE_BAD
+                          ? " 우연으로도 충분히 나올 수 있는 성적입니다."
+                          : s.chance >= CHANCE_GOOD
+                            ? " 애매합니다. 우연이라고 하기도, 아니라고 하기도 어렵습니다."
+                            : " 사이클 표본 자체가 적다는 점은 감안하세요."}
                     </p>
-                    {s.chance != null && s.chance >= 0.5 ? (
+                    {s.chance != null && s.chance >= CHANCE_BAD ? (
                       <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-                        100%에 가까운 건 계산이 고장 난 게 아니라, 정확도 {num(s.precision, 0, "%")}가
-                        기준선 {num(report.windowSharePct, 0, "%")}와 비슷하거나 낮다는 뜻입니다. 자주 켜지는
-                        지표는 아무 의미가 없어도 상승장 시작 부근에 그만큼은 떨어집니다. 즉 &quot;이 지표엔
-                        추가 정보가 없다&quot;는 판정입니다.
+                        확률이 높게 나온 건 계산이 고장 난 게 아니라, 정확도 {num(s.precision, 0, "%")}가
+                        기준선 {num(report.windowSharePct, 0, "%")}와 비슷하거나 낮다는 뜻입니다. 아무 데나
+                        찍어도 {num(report.windowSharePct, 0, "%")}는 맞는 판이라 그만큼 맞힌 건 정보가 아닙니다.
+                        {report.windowSharePct > 50
+                          ? " 기준선이 이렇게 높은 건 이 종목에 상승장 시작이 너무 자주 잡혀서입니다 — 지표 문제가 아니라 사이클 기준이 헐거운 것입니다."
+                          : ""}
                       </p>
                     ) : null}
                     <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
