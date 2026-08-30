@@ -10,6 +10,7 @@ import { enrich } from "../lib/indicators";
 import { applyFilter, clusterIndices } from "../lib/filter";
 import { analyze, forwardReturn, maxForwardReturn } from "../lib/stats";
 import { checkLatest, formatAlert } from "../lib/alerts/evaluate";
+import { mergeOlderHistory, toUniqueBars } from "../lib/data/crypto";
 import { parseMaCommand } from "../lib/ma";
 import { PRESET_CHIPS, PRESET_CONDITIONS } from "../lib/presets";
 import type { Bar, FilterSpec, PresetName } from "../types";
@@ -339,6 +340,48 @@ console.log("\n[8] 알림 판정 (마지막 봉)");
   assert(
     cryptoHit == null || cryptoHit.bar.date !== today,
     "코인 알림은 미완성 오늘 봉을 건너뛴다",
+  );
+}
+
+// ── [9] 코인 장기 히스토리 ─────────────────────────────────────────
+console.log("\n[9] 코인 일봉 정제 / 장기 히스토리 이어붙이기");
+{
+  const row = (date: string, o: number, h: number, l: number, c: number, v = 1000) => ({
+    date, open: o, high: h, low: l, close: c, volume: v,
+  });
+
+  // 신규 상장 첫날 0에 가까운 체결가가 찍힌 봉. 이 한 봉이 로그 축을 망친다.
+  const cleaned = toUniqueBars([
+    row("2018-01-01", 0.05, 13500, 0.05, 13000),
+    row("2018-01-02", 13000, 13600, 12800, 13400),
+    row("2018-01-03", 13400, 13500, 12000, 12100),
+  ]);
+  assert(cleaned.length === 2, "고가/저가가 100배 벌어진 상장 첫 봉은 버린다");
+  assert(cleaned[0].date === "2018-01-02", "정상 봉은 그대로 남는다");
+
+  assert(
+    toUniqueBars([row("2020-03-12", 7900, 8000, 4500, 4800)]).length === 1,
+    "하루 -40%(코로나 폭락) 같은 진짜 폭은 살린다",
+  );
+  assert(
+    toUniqueBars([row("2018-01-01", 0, 13500, 0, 13000)]).length === 0,
+    "0이 섞인 봉은 버린다",
+  );
+
+  const recent = [row("2018-01-02", 13000, 13600, 12800, 13400), row("2018-01-03", 13400, 13500, 12000, 12100)];
+  const older = [
+    row("2011-08-18", 10.9, 11.2, 10.5, 11.0),
+    row("2011-08-19", 11.0, 11.3, 10.8, 11.1),
+    // 겹치는 날짜 — 주 소스가 이겨야 한다.
+    row("2018-01-02", 1, 2, 0.5, 1.5),
+  ];
+  const merged = mergeOlderHistory(recent, older);
+  assert(merged.length === 4, "주 소스 앞 구간만 이어 붙인다");
+  assert(merged[0].date === "2011-08-18", "합친 시계열은 가장 오래된 날짜부터 시작한다");
+  assert(merged[2].close === 13400, "겹치는 날짜는 주 소스 값을 쓴다");
+  assert(
+    mergeOlderHistory(recent, []).length === 2 && mergeOlderHistory([], older).length === 3,
+    "한쪽이 비면 다른 쪽을 그대로 돌려준다",
   );
 }
 

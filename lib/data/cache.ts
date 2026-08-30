@@ -33,11 +33,17 @@ export function __setSavedAtForTest(ticker: string, savedAt: number, years?: num
 }
 
 /**
+ * 받아오는 구간 자체가 달라지면 올려서 옛 캐시를 버린다.
+ * v2: 코인 장기 히스토리를 Bitstamp로 앞까지 채우기 시작 (BTC가 2018년부터 시작하던 문제).
+ */
+const LONG_SCHEMA = "v2";
+
+/**
  * 기간이 다르면 다른 캐시다. 5년치 캐시를 20년 요청에 돌려주면
  * 사이클 분석이 조용히 짧은 데이터로 돌아간다.
  */
 function keyFor(ticker: string, years?: number): string {
-  return years == null ? `ohlcv:${ticker}` : `ohlcv:${ticker}:${years}y`;
+  return years == null ? `ohlcv:${ticker}` : `ohlcv:${ticker}:${years}y:${LONG_SCHEMA}`;
 }
 
 function toHit(env: Envelope | null): CacheHit | null {
