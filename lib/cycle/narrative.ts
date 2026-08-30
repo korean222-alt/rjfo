@@ -74,13 +74,15 @@ export function narrate(report: CycleReport): string {
     );
   }
 
-  const avgAtStart = report.cycleStarts.length
-    ? report.cycleStarts.reduce((a, c) => a + c.on, 0) / report.cycleStarts.length
+  const completeStarts = report.cycleStarts.filter((c) => c.complete);
+  const avgAtStart = completeStarts.length
+    ? completeStarts.reduce((a, c) => a + c.onPct, 0) / completeStarts.length
     : null;
+  const nowPct = report.now.total > 0 ? (report.now.on / report.now.total) * 100 : 0;
   lines.push(
-    `현재는 ${report.regime.phase} 국면이고 지표 ${report.now.total}개 중 ${report.now.on}개가 켜져 있습니다.` +
+    `현재는 ${report.regime.phase} 국면이고 지표 ${report.now.total}개 중 ${report.now.on}개가 켜져 있습니다 (${Math.round(nowPct)}%).` +
       (avgAtStart != null
-        ? ` 과거 상승장 시작 30거래일 뒤에는 평균 ${avgAtStart.toFixed(1)}개가 켜져 있었습니다.`
+        ? ` 과거 상승장 시작 30거래일 뒤에는 평균 ${Math.round(avgAtStart)}%가 켜져 있었습니다 (${completeStarts.length}번 기준).`
         : ""),
   );
 
