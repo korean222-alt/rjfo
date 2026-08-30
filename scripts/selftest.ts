@@ -11,6 +11,7 @@ import { applyFilter, clusterIndices } from "../lib/filter";
 import { analyze, forwardReturn, maxForwardReturn } from "../lib/stats";
 import { checkLatest, formatAlert } from "../lib/alerts/evaluate";
 import { mergeOlderHistory, toUniqueBars } from "../lib/data/crypto";
+import { binomTailGe } from "../lib/cycle/evaluate";
 import { parseMaCommand } from "../lib/ma";
 import { PRESET_CHIPS, PRESET_CONDITIONS } from "../lib/presets";
 import type { Bar, FilterSpec, PresetName } from "../types";
@@ -383,6 +384,44 @@ console.log("\n[9] 코인 일봉 정제 / 장기 히스토리 이어붙이기");
     mergeOlderHistory(recent, []).length === 2 && mergeOlderHistory([], older).length === 3,
     "한쪽이 비면 다른 쪽을 그대로 돌려준다",
   );
+}
+
+// ── [10] 우연일 확률 (이항 꼬리 확률) ─────────────────────────────
+console.log("\n[10] 우연일 확률 — 이항 검정");
+{
+  // 손계산: n=5, p=0.5 → P(X≥3) = (10+5+1)/32 = 0.5
+  approx(binomTailGe(3, 5, 0.5), 0.5, 1e-12, "P(X≥3 | n=5, p=0.5)");
+  // P(X≥1) = 1 − (1−p)^n = 1 − 0.9^10
+  approx(binomTailGe(1, 10, 0.1), 1 - Math.pow(0.9, 10), 1e-12, "P(X≥1 | n=10, p=0.1)");
+  // 전부 맞을 확률 = p^n
+  approx(binomTailGe(4, 4, 0.25), Math.pow(0.25, 4), 1e-12, "P(X≥4 | n=4, p=0.25)");
+
+  assert(binomTailGe(0, 10, 0.3) === 1, "0번 이상은 항상 확률 1");
+  assert(binomTailGe(11, 10, 0.3) === 0, "n을 넘는 횟수는 확률 0");
+  assert(binomTailGe(3, 10, 0) === 0, "p=0이면 맞을 수 없다");
+  assert(binomTailGe(3, 10, 1) === 1, "p=1이면 반드시 맞는다");
+
+  // naive 구현(직접 곱셈)과 대조 — 로그 공간 계산이 맞는지.
+  const naive = (k: number, n: number, p: number) => {
+    let sum = 0;
+    for (let i = k; i <= n; i++) {
+      let c = 1;
+      for (let j = 0; j < i; j++) c = (c * (n - j)) / (j + 1);
+      sum += c * Math.pow(p, i) * Math.pow(1 - p, n - i);
+    }
+    return sum;
+  };
+  approx(binomTailGe(7, 20, 0.2), naive(7, 20, 0.2), 1e-10, "n=20에서 naive 구현과 일치");
+
+  // 언더플로 방어: 작은 p × 큰 n에서도 0이나 NaN이 되지 않는다.
+  const tiny = binomTailGe(40, 2000, 0.012);
+  assert(Number.isFinite(tiny) && tiny > 0 && tiny < 1, `n=2000에서도 정상 (${tiny.toExponential(2)})`);
+
+  // 표본이 적으면 '전부 적중'도 우연일 확률이 높다 — 이 앱이 경고해야 하는 그 상황.
+  const 적음 = binomTailGe(2, 2, 0.12);
+  const 많음 = binomTailGe(12, 12, 0.12);
+  assert(적음 > 0.01, `신호 2번 다 맞은 건 우연일 수 있다 (${(적음 * 100).toFixed(1)}%)`);
+  assert(많음 < 적음, "같은 100% 적중이라도 표본이 많으면 우연일 확률이 낮다");
 }
 
 console.log(

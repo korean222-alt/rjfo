@@ -470,6 +470,28 @@ export default function CyclePage() {
                     <b className={selectedSignal.currentlyOn ? "text-up" : "text-muted"}>
                       {selectedSignal.currentlyOn ? "켜짐" : "꺼짐"}
                     </b>
+                    <br />
+                    과거 상승장 시작 {report.cycles.length}번 중{" "}
+                    <b className="text-white">{selectedSignal.hitCount}번</b> 적중(
+                    {selectedSignal.hitRate == null ? "—" : `${selectedSignal.hitRate.toFixed(0)}%`}) · 신호{" "}
+                    {selectedSignal.eventCount}회 · 우연일 확률{" "}
+                    <b
+                      className={
+                        selectedSignal.chance == null
+                          ? "text-muted"
+                          : selectedSignal.chance < 0.05
+                            ? "text-up"
+                            : selectedSignal.chance < 0.2
+                              ? "text-white"
+                              : "text-down"
+                      }
+                    >
+                      {selectedSignal.chance == null
+                        ? "—"
+                        : selectedSignal.chance < 0.001
+                          ? "0.1% 미만"
+                          : `${(selectedSignal.chance * 100).toFixed(selectedSignal.chance < 0.1 ? 1 : 0)}%`}
+                    </b>
                   </p>
                 ) : (
                   <p className="mt-2 px-0.5 text-[11px] text-muted">

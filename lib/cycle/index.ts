@@ -133,8 +133,13 @@ export function analyzeCycle(
     );
   }
 
+  // 다중검정: 30개를 재면 '우연일 확률 5% 미만'짜리가 그냥 한두 개 나온다.
+  // 그 기대 개수를 실제 개수와 나란히 보여줘야 사용자가 속지 않는다.
+  const significant = evaluated.filter((s) => s.chance != null && s.chance < 0.05).length;
+  const expectedByChance = evaluated.length * 0.05;
   warnings.push(
-    `지표 ${evaluated.length}개를 한꺼번에 검사했습니다. 여러 개를 동시에 시험하면 그중 일부는 우연히 좋아 보입니다(다중검정).`,
+    `지표 ${evaluated.length}개를 한꺼번에 검사했습니다. 여러 개를 동시에 시험하면 그중 일부는 우연히 좋아 보입니다(다중검정). ` +
+      `'우연일 확률 5% 미만'인 지표가 지금 ${significant}개인데, 아무 의미 없는 지표만 ${evaluated.length}개 늘어놔도 평균 ${expectedByChance.toFixed(1)}개는 그렇게 나옵니다.`,
   );
   if (cycles.length) {
     warnings.push(
@@ -188,6 +193,8 @@ export function factsForLlm(report: CycleReport, topN = 6): string {
     남은상승: s.medianCaptureSharePct == null ? null : Math.round(s.medianCaptureSharePct),
     정확도: s.precision == null ? null : Math.round(s.precision),
     우연대비: s.lift == null ? null : Number(s.lift.toFixed(2)),
+    신호횟수: s.eventCount,
+    우연일확률: s.chance == null ? null : Number(s.chance.toFixed(4)),
     "1년수익률": s.forward["250"].avg == null ? null : Math.round(s.forward["250"].avg),
     "기저율대비": s.edge == null ? null : Math.round(s.edge),
     현재: s.currentlyOn ? "켜짐" : "꺼짐",
