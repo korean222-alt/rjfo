@@ -11,7 +11,9 @@
  * 라벨링은 원래 사후적(hindsight)인 작업이라 여기서 미래를 보는 건 정상이다.
  * 지표 평가 쪽(evaluate.ts)에서만 미래 참조가 금지된다.
  *
- * 임계값은 자산군마다 다르다. 코인은 60% 낙폭이 흔하고 주식은 20%면 약세장이다.
+ * 임계값은 자산군마다 다르다. 코인 40% 낙폭은 흔하고, 주식 20%면 약세장이다.
+ * 반등 기준은 그보다 높게 잡는다. 고점 대비 -20% 후 +25% 회복은 상승장 전환이
+ * 아니라 조정에서 되돌린 경우가 대부분이라, 주식 +40% / 코인 +80%를 기본으로 둔다.
  */
 
 import type { Bar } from "@/types";
@@ -23,8 +25,8 @@ export type CycleThresholds = {
   bullPct: number;
 };
 
-export const CRYPTO_THRESHOLDS: CycleThresholds = { bearPct: 40, bullPct: 50 };
-export const STOCK_THRESHOLDS: CycleThresholds = { bearPct: 20, bullPct: 25 };
+export const CRYPTO_THRESHOLDS: CycleThresholds = { bearPct: 40, bullPct: 80 };
+export const STOCK_THRESHOLDS: CycleThresholds = { bearPct: 20, bullPct: 40 };
 
 export type Cycle = {
   /** 직전 고점 (첫 사이클은 데이터 시작점일 수 있다). */

@@ -221,6 +221,7 @@ export function factsForLlm(report: CycleReport, topN = 6): string {
     우연대비: s.lift == null ? null : Number(s.lift.toFixed(2)),
     신호횟수: s.eventCount,
     우연일확률: s.chance == null ? null : Number(s.chance.toFixed(4)),
+    이미켜짐적중: s.alreadyOnCount,
     "1년수익률": s.forward["250"].avg == null ? null : Math.round(s.forward["250"].avg),
     "기저율대비": s.edge == null ? null : Math.round(s.edge),
     현재: s.currentlyOn ? "켜짐" : "꺼짐",

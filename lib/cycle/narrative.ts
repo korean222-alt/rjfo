@@ -58,7 +58,11 @@ export function narrate(report: CycleReport): string {
           ? `바닥보다 중앙값 ${best.medianLeadDays}거래일 늦게`
           : `바닥보다 중앙값 ${Math.abs(best.medianLeadDays)}거래일 먼저`;
     lines.push(
-      `종합 1위는 "${best.label}"입니다. ${cycles.length}번 중 ${best.hitCount}번 적중, ${lead} 떴고, ` +
+      `종합 1위는 "${best.label}"입니다. ${cycles.length}번 중 ${best.hitCount}번 적중` +
+        (best.alreadyOnCount
+          ? ` (그중 ${best.alreadyOnCount}번은 바닥 당시 이미 켜져 있던 상태)`
+          : "") +
+        `, ${lead} 떴고, ` +
         `그 시점에 그 사이클 상승분의 ${pct(best.medianCaptureSharePct)}가 아직 남아 있었습니다.`,
     );
     if (best.lift != null) {

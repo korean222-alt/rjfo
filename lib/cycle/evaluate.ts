@@ -55,6 +55,8 @@ export type CycleHit = {
   leadDays: number | null;
   /** 신호 시점에 그 사이클 상승분의 몇 %가 남아 있었나. */
   captureSharePct: number | null;
+  /** 창 안에서 새로 켜진 게 아니라, 바닥 당일 이미 켜져 있었다. */
+  alreadyOn: boolean;
 };
 
 export type SignalEvaluation = SignalDef & {
@@ -63,6 +65,8 @@ export type SignalEvaluation = SignalDef & {
   cycleHits: CycleHit[];
   hitCount: number;
   hitRate: number | null;
+  /** 바닥 당시 이미 켜져 있어서 적중한 횟수. 새로 뜬 신호가 아니다. */
+  alreadyOnCount: number;
   medianLeadDays: number | null;
   medianCaptureSharePct: number | null;
   falseAlarms: number;
@@ -185,6 +189,47 @@ export function eventIndices(state: (boolean | null)[]): number[] {
   return out;
 }
 
+/**
+ * 사이클마다 적중 창. 창끼리 겹치면 하루가 두 바닥에 속해 적중률이 부풀어 오르므로
+ * 이웃 바닥 사이의 중점에서 자른다. 하루는 가장 가까운 바닥에만 속한다.
+ */
+export function exclusiveCycleBounds(
+  cycles: Cycle[],
+  barCount: number,
+  win: MatchWindow = DEFAULT_WINDOW,
+): { lo: number; hi: number }[] {
+  return cycles.map((c, i) => {
+    const rawLo = c.troughIdx - win.before;
+    const rawHi = c.troughIdx + win.after;
+    const prev = i > 0 ? cycles[i - 1].troughIdx : null;
+    const next = i + 1 < cycles.length ? cycles[i + 1].troughIdx : null;
+    const midLo = prev == null ? Number.NEGATIVE_INFINITY : Math.floor((prev + c.troughIdx) / 2) + 1;
+    const midHi = next == null ? Number.POSITIVE_INFINITY : Math.floor((c.troughIdx + next) / 2);
+    let lo = Math.max(0, rawLo, midLo);
+    let hi = Math.min(barCount - 1, rawHi, midHi);
+    if (lo > hi) {
+      const pinned = Math.max(0, Math.min(barCount - 1, c.troughIdx));
+      lo = pinned;
+      hi = pinned;
+    }
+    return { lo, hi };
+  });
+}
+
+function lastAtOrBefore(events: number[], idx: number): number | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i] <= idx) return events[i];
+  }
+  return null;
+}
+
+function firstInRange(events: number[], lo: number, hi: number): number | null {
+  for (const e of events) {
+    if (e >= lo && e <= hi) return e;
+  }
+  return null;
+}
+
 export type EvaluateOptions = {
   window?: MatchWindow;
 };
@@ -201,30 +246,56 @@ export function evaluateSignal(
   const win = opts.window ?? DEFAULT_WINDOW;
   const events = eventIndices(signal.state);
   const lastIdx = bars.length - 1;
+  const bounds = exclusiveCycleBounds(cycles, bars.length, win);
 
   const matchedEvents = new Set<number>();
-  const cycleHits: CycleHit[] = cycles.map((cycle) => {
-    const lo = cycle.troughIdx - win.before;
-    const hi = cycle.troughIdx + win.after;
-    // 창 안에서 가장 먼저 뜬 신호를 그 사이클의 대표로 삼는다.
-    const hit = events.find((e) => e >= lo && e <= hi);
-    if (hit == null) {
-      return { troughDate: cycle.troughDate, eventDate: null, leadDays: null, captureSharePct: null };
+  const cycleHits: CycleHit[] = cycles.map((cycle, i) => {
+    const { lo, hi } = bounds[i];
+    const onAtTrough = signal.state[cycle.troughIdx] === true;
+    const miss = {
+      troughDate: cycle.troughDate,
+      eventDate: null,
+      leadDays: null,
+      captureSharePct: null,
+      alreadyOn: false,
+    };
+
+    let hitIdx: number | null = null;
+    let alreadyOn = false;
+    let priceIdx: number;
+
+    if (onAtTrough) {
+      const prev = lastAtOrBefore(events, cycle.troughIdx);
+      alreadyOn = prev == null || prev < lo;
+      hitIdx = prev != null ? prev : cycle.troughIdx;
+      priceIdx = cycle.troughIdx;
+      // 창 직전에서 켜져 바닥까지 유지되면 그 점등이 이 사이클의 신호다.
+      // 이미 앞 사이클에 묶인 점등(한 번 켜진 채 여러 바닥을 지난 경우)은 다시 세지 않는다.
+      if (prev != null && !matchedEvents.has(prev)) matchedEvents.add(prev);
+    } else {
+      const late = firstInRange(events, Math.max(lo, cycle.troughIdx), hi);
+      if (late == null) return miss;
+      hitIdx = late;
+      priceIdx = late;
+      matchedEvents.add(late);
     }
-    matchedEvents.add(hit);
 
     const span = cycle.nextPeakClose - cycle.troughClose;
-    const remaining = cycle.nextPeakClose - bars[hit].close;
+    const remaining = cycle.nextPeakClose - bars[priceIdx].close;
     return {
       troughDate: cycle.troughDate,
-      eventDate: bars[hit].date,
-      leadDays: hit - cycle.troughIdx,
+      eventDate: bars[hitIdx].date,
+      leadDays: hitIdx - cycle.troughIdx,
       captureSharePct: span > 0 ? Math.max(0, (remaining / span) * 100) : null,
+      alreadyOn,
     };
   });
 
   const hits = cycleHits.filter((h) => h.eventDate != null);
+  const alreadyOnCount = hits.filter((h) => h.alreadyOn).length;
+  const freshHits = hits.filter((h) => !h.alreadyOn);
   const hitRate = cycles.length ? (hits.length / cycles.length) * 100 : null;
+  const freshHitRate = cycles.length ? (freshHits.length / cycles.length) * 100 : 0;
   const falseAlarms = events.length - matchedEvents.size;
   const precision = events.length ? (matchedEvents.size / events.length) * 100 : null;
   const lift = precision != null && windowShare > 0 ? precision / 100 / windowShare : null;
@@ -245,17 +316,13 @@ export function evaluateSignal(
   const lastEvent = events.length ? events[events.length - 1] : null;
 
   const captureMedian = median(
-    hits.map((h) => h.captureSharePct).filter((v): v is number => v != null),
+    freshHits.map((h) => h.captureSharePct).filter((v): v is number => v != null),
   );
 
-  // 세 축의 가중합.
-  //
-  // 정확도를 그대로 쓰지 않고 lift를 쓰는 게 중요하다. 자주 켜지는 지표는 정확도가
-  // 낮아도 사이클을 전부 '적중'하므로, 정확도만으로는 충분히 벌하지 못한다.
-  // lift는 "아무 날이나 찍었을 때보다 나은가"를 직접 재기 때문에 노이즈 지표를 걸러낸다.
-  // 3배 이상이면 만점으로 본다 (표본이 적어 그 위는 변별력이 없다).
+  // 순위는 '그 사이클에서 새로 켜졌는가'와 우연대비. 바닥 당시 이미 켜진 건
+  // 적중률에는 넣되 (사용자가 묻는 질문), 항상 켜진 지표가 1등이 되지 않게 점수에서는 뺀다.
   const liftScore = lift == null ? 0 : Math.min(1, lift / 3) * 100;
-  const score = (hitRate ?? 0) * 0.4 + liftScore * 0.35 + (captureMedian ?? 0) * 0.25;
+  const score = freshHitRate * 0.4 + liftScore * 0.4 + (captureMedian ?? 0) * 0.2;
 
   return {
     key: signal.key,
@@ -268,6 +335,7 @@ export function evaluateSignal(
     cycleHits,
     hitCount: hits.length,
     hitRate,
+    alreadyOnCount,
     medianLeadDays: median(hits.map((h) => h.leadDays).filter((v): v is number => v != null)),
     medianCaptureSharePct: captureMedian,
     falseAlarms,
@@ -293,8 +361,7 @@ export function baselineStats(bars: EnrichedBar[]): Record<string, ForwardStat> 
 /**
  * 전체 봉 중 '상승장 시작 부근'(사이클 창)이 차지하는 비율.
  *
- * 창끼리 겹칠 수 있어서 합집합으로 센다. 겹친 걸 두 번 세면 분모가 부풀어
- * 모든 지표의 lift가 실제보다 낮게 나온다.
+ * 창은 exclusiveCycleBounds로 이미 안 겹친다. 합집합 = 합.
  */
 export function cycleWindowShare(
   barCount: number,
@@ -303,10 +370,8 @@ export function cycleWindowShare(
 ): number {
   if (barCount <= 0 || !cycles.length) return 0;
   const covered = new Uint8Array(barCount);
-  for (const c of cycles) {
-    const lo = Math.max(0, c.troughIdx - win.before);
-    const hi = Math.min(barCount - 1, c.troughIdx + win.after);
-    for (let i = lo; i <= hi; i++) covered[i] = 1;
+  for (const b of exclusiveCycleBounds(cycles, barCount, win)) {
+    for (let i = b.lo; i <= b.hi; i++) covered[i] = 1;
   }
   let n = 0;
   for (let i = 0; i < barCount; i++) n += covered[i];

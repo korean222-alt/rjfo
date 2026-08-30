@@ -8,8 +8,15 @@
  */
 import { enrich } from "../lib/indicators";
 import { analyzeCycle, completedStarts, snapshotOnPct } from "../lib/cycle";
-import { findCycles, findPivots } from "../lib/cycle/regime";
-import { eventIndices } from "../lib/cycle/evaluate";
+import { findCycles, findPivots, STOCK_THRESHOLDS, CRYPTO_THRESHOLDS } from "../lib/cycle/regime";
+import {
+  eventIndices,
+  evaluateSignal,
+  exclusiveCycleBounds,
+  cycleWindowShare,
+  DEFAULT_WINDOW,
+  baselineStats,
+} from "../lib/cycle/evaluate";
 import { toMonthly, toWeekly, projectToDaily, barsForView, snapDatesToView } from "../lib/cycle/resample";
 import { ema, macd, rsi, sma } from "../lib/cycle/ta";
 import { narrate } from "../lib/cycle/narrative";
@@ -204,8 +211,12 @@ console.log("\n[6] 전체 파이프라인");
     "적중률은 0~100% 범위",
   );
   assert(
-    report.signals.every((s) => s.eventCount >= s.hitCount),
-    "적중 횟수는 신호 횟수를 넘을 수 없다",
+    report.signals.every((s) => s.hitCount <= report.cycles.length),
+    "적중 횟수는 사이클 수를 넘을 수 없다",
+  );
+  assert(
+    report.signals.every((s) => s.alreadyOnCount <= s.hitCount),
+    "이미켜짐 횟수는 적중을 넘을 수 없다",
   );
   assert(
     report.signals.every((s) => s.falseAlarms >= 0),
@@ -422,10 +433,143 @@ console.log("\n[9] 50주선");
   );
 }
 
-// ── 10. 실데이터 (인자로 티커를 주면) ─────────────────────────────
+// ── 10. 기본 임계값은 얕은 반등을 상승장으로 세지 않는다 ──────────
+console.log("\n[10] 얕은 반등은 기본 기준으로 상승장이 아니다");
+{
+  const rampTo = (closes: number[], to: number, days: number) => {
+    const from = closes[closes.length - 1];
+    for (let i = 1; i <= days; i++) closes.push(from + ((to - from) * i) / days);
+  };
+
+  const shallow: number[] = [100];
+  rampTo(shallow, 120, 40); // 고점
+  rampTo(shallow, 96, 40); // -20%
+  rampTo(shallow, 121, 40); // 96 대비 +26%
+  const stockShallow = findCycles(barsFromCloses(shallow), STOCK_THRESHOLDS);
+  assert(stockShallow.length === 0, `주식 +26% 반등은 사이클 아님 (실제 ${stockShallow.length})`);
+
+  const real: number[] = [100];
+  rampTo(real, 120, 40);
+  rampTo(real, 96, 40); // -20%
+  rampTo(real, 140, 60); // 96 대비 +46%
+  const stockReal = findCycles(barsFromCloses(real), STOCK_THRESHOLDS);
+  assert(stockReal.length === 1, `주식 +46% 반등은 사이클 (실제 ${stockReal.length})`);
+
+  const cryptoBounce: number[] = [100];
+  rampTo(cryptoBounce, 200, 40);
+  rampTo(cryptoBounce, 120, 40); // -40%
+  rampTo(cryptoBounce, 185, 40); // 120 대비 +54%
+  const cryptoShallow = findCycles(barsFromCloses(cryptoBounce), CRYPTO_THRESHOLDS);
+  assert(cryptoShallow.length === 0, `코인 +54% 반등은 사이클 아님 (실제 ${cryptoShallow.length})`);
+
+  const cryptoReal: number[] = [100];
+  rampTo(cryptoReal, 200, 40);
+  rampTo(cryptoReal, 120, 40); // -40%
+  rampTo(cryptoReal, 220, 50); // 120 대비 +83%
+  const cryptoOk = findCycles(barsFromCloses(cryptoReal), CRYPTO_THRESHOLDS);
+  assert(cryptoOk.length === 1, `코인 +83% 반등은 사이클 (실제 ${cryptoOk.length})`);
+}
+
+// ── 11. 적중 판정: 이미 켜짐 / 창 비겹침 / 창 직전 엣지 ───────────
+console.log("\n[11] 적중 판정 (이미 켜짐, 창 겹침 없음)");
+{
+  const n = 400;
+  const closes = Array.from({ length: n }, (_, i) => 100 + i * 0.1);
+  const bars = enrich(barsFromCloses(closes));
+  const cycles = [
+    {
+      peakDate: null,
+      peakIdx: null,
+      peakClose: null,
+      troughDate: dateAt(100),
+      troughIdx: 100,
+      troughClose: bars[100].close,
+      drawdownPct: -30,
+      gainPct: 80,
+      nextPeakDate: dateAt(220),
+      nextPeakIdx: 220,
+      nextPeakClose: bars[220].close,
+      closed: true,
+    },
+    {
+      peakDate: dateAt(220),
+      peakIdx: 220,
+      peakClose: bars[220].close,
+      troughDate: dateAt(250),
+      troughIdx: 250,
+      troughClose: bars[250].close,
+      drawdownPct: -30,
+      gainPct: 50,
+      nextPeakDate: null,
+      nextPeakIdx: null,
+      nextPeakClose: bars[n - 1].close,
+      closed: false,
+    },
+  ];
+
+  const bounds = exclusiveCycleBounds(cycles, n, DEFAULT_WINDOW);
+  assert(bounds[0].hi < bounds[1].lo, `창이 안 겹친다 (${bounds[0].hi} < ${bounds[1].lo})`);
+  assert(bounds[0].hi === Math.floor((100 + 250) / 2), `1번 창 끝은 중점 (실제 ${bounds[0].hi})`);
+
+  const share = cycleWindowShare(n, cycles, DEFAULT_WINDOW);
+  const naive =
+    (Math.min(n - 1, 100 + 150) - Math.max(0, 100 - 20) + 1 +
+      (Math.min(n - 1, 250 + 150) - Math.max(0, 250 - 20) + 1)) /
+    n;
+  assert(share < naive - 0.05, `비겹침 창 비율 ${share.toFixed(2)} < 겹친 창 ${naive.toFixed(2)}`);
+
+  const baseline = baselineStats(bars);
+  const alwaysOn = {
+    key: "always",
+    label: "항상 켜짐",
+    group: "추세" as const,
+    why: "test",
+    timeframe: "일봉" as const,
+    state: bars.map((_, i) => (i < 5 ? null : true)),
+  };
+  const always = evaluateSignal(bars, alwaysOn, cycles, baseline, share);
+  assert(always.hitCount === 2, `항상 켜짐은 바닥마다 적중 (실제 ${always.hitCount})`);
+  assert(always.alreadyOnCount === 2, `둘 다 이미 켜짐 (실제 ${always.alreadyOnCount})`);
+  assert(always.eventCount === 0, `상승 엣지가 없으면 신호 0회 (실제 ${always.eventCount})`);
+  assert(always.score < 50, `항상 켜짐은 순위에서 빠진다 (score ${always.score.toFixed(1)})`);
+
+  // 창 시작(trough-20=80)보다 앞인 idx 78에서 켜져 바닥까지 유지.
+  const earlyState: (boolean | null)[] = bars.map(() => false);
+  for (let i = 78; i < n; i++) earlyState[i] = true;
+  const early = evaluateSignal(
+    bars,
+    { ...alwaysOn, key: "early", label: "창 직전 점등", state: earlyState },
+    cycles,
+    baseline,
+    share,
+  );
+  assert(early.hitCount >= 1, `창 직전 점등도 1번 사이클 적중 (실제 ${early.hitCount})`);
+  assert(early.cycleHits[0].alreadyOn === true, "1번 사이클은 이미 켜짐으로 적중");
+  assert(early.cycleHits[0].eventDate != null, "이미 켜짐이어도 점등일이 있다");
+  assert(early.falseAlarms === 0, "창 직전 점등은 오탐이 아니다");
+
+  // 각 바닥 직후에만 짧게 점등. 창이 안 겹치니 신호가 서로 다른 사이클에 귀속.
+  const timed: (boolean | null)[] = bars.map(() => false);
+  timed[110] = true;
+  timed[111] = true;
+  timed[260] = true;
+  timed[261] = true;
+  const timedEval = evaluateSignal(
+    bars,
+    { ...alwaysOn, key: "timed", label: "바닥 직후", state: timed },
+    cycles,
+    baseline,
+    share,
+  );
+  assert(timedEval.hitCount === 2, `바닥 직후 점등은 두 사이클 모두 적중 (실제 ${timedEval.hitCount})`);
+  assert(timedEval.alreadyOnCount === 0, "바닥 당시에는 꺼져 있었고 직후 켜짐");
+  assert(timedEval.falseAlarms === 0, `창 안 신호는 오탐 아님 (실제 ${timedEval.falseAlarms})`);
+}
+
+// ── 12. 실데이터 (인자로 티커를 주면) ─────────────────────────────
 const ticker = process.argv[2];
 if (ticker) {
-  console.log(`\n[10] 실데이터: ${ticker}`);
+  console.log(`\n[12] 실데이터: ${ticker}`);
   (async () => {
     const { loadBars, MAX_YEARS } = await import("../lib/data");
     const { normalizeTicker } = await import("../lib/data/provider");
