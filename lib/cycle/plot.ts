@@ -251,6 +251,20 @@ function build(key: string, ctx: Ctx): SignalPlot {
       };
     }
 
+    case "rsi_m50": {
+      const mo = toMonthly(bars);
+      const r = rsi(mo.bars.map((b) => b.close));
+      return {
+        overlays: [],
+        pane: {
+          title: "월봉 RSI (14)",
+          lines: [periodLine(bars, mo.periodOf, r, "월봉 RSI", C.sky, { width: 2 })],
+          levels: [{ value: 50, label: "50" }],
+        },
+        rule: "월봉 RSI가 50 위면 켜짐 (그 달이 마감된 뒤 반영)",
+      };
+    }
+
     // ── 기타 오실레이터 ─────────────────────────────────────────
     case "stoch": {
       const st = stochastic(bars);
@@ -418,6 +432,7 @@ const VIEW_ALIAS: Record<string, string> = {
   macd_w: "macd_d",
   macd_m: "macd_d",
   rsi_w50: "rsi_d50",
+  rsi_m50: "rsi_d50",
 };
 
 /**

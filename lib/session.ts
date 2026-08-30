@@ -135,8 +135,8 @@ export function loadOverlayPeriods(): number[] {
 // 키에 버전을 붙인다: 채점 규칙이 바뀌면(적중 정의, 우연일 확률 계산 등) 예전에 저장된
 // 리포트는 새 화면이 기대하는 필드가 없어 숫자가 비거나 옛 기준으로 잘못 읽힌다.
 // 버전을 올리면 그냥 다시 분석한다.
-const CYCLE_KEY = "volume-analyzer:cycle:v2";
-const CYCLE_KEYS_OLD = ["volume-analyzer:cycle"];
+const CYCLE_KEY = "volume-analyzer:cycle:v3";
+const CYCLE_KEYS_OLD = ["volume-analyzer:cycle", "volume-analyzer:cycle:v2"];
 
 export function saveCycle(payload: unknown): void {
   try {

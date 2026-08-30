@@ -22,6 +22,8 @@ import {
   type MatchWindow,
   type SignalEvaluation,
 } from "./evaluate";
+import { buildCombos, type ComboEvaluation } from "./combos";
+import { gradeSignals, type GradedSignal } from "./grade";
 import {
   currentRegime,
   findCycles,
@@ -31,7 +33,9 @@ import {
 } from "./regime";
 import { buildSignals, type SignalSeries } from "./signals";
 
+export * from "./combos";
 export * from "./evaluate";
+export * from "./grade";
 export * from "./regime";
 export * from "./signals";
 
@@ -63,7 +67,12 @@ export type CycleReport = {
   baseline: Record<string, ForwardStat>;
   /** 전체 기간 중 '상승장 시작 부근'이 차지하는 비율(%). 지표 lift의 기준선. */
   windowSharePct: number;
-  signals: SignalEvaluation[];
+  signals: GradedSignal[];
+  /**
+   * 지표 두 개를 겹친 매수 규칙. "365일선 위 + 주봉 MACD 골든크로스"처럼.
+   * 단일 지표와 같은 다중검정 보정 풀에서 q값을 매긴다.
+   */
+  combos: (GradedSignal & { members: [string, string] })[];
   /**
    * 과거 상승장 시작을 하나도 빠짐없이 '새로 켜져서' 잡아낸 지표들.
    * 바닥에 그냥 켜져 있던 것(alreadyOn)은 여기 못 들어온다.
@@ -117,9 +126,28 @@ export function analyzeCycle(
   const baseline = baselineStats(bars);
 
   const windowShare = cycleWindowShare(bars.length, cycles, window);
-  const evaluated = signals
+  const singles = signals
     .map((s) => evaluateSignal(bars, s, cycles, baseline, windowShare, { window }))
     .sort((a, b) => b.score - a.score);
+
+  // 조합은 상위 지표들로만 만든다. 만든 개수는 아래 다중검정 보정 풀에 그대로 들어간다.
+  const comboEvals: ComboEvaluation[] = buildCombos(
+    bars,
+    signals,
+    singles,
+    cycles,
+    baseline,
+    windowShare,
+    { window },
+  );
+
+  // q값은 '한꺼번에 몇 개를 쟀느냐'에 달려 있다. 단일과 조합을 한 풀에 넣고 같이 보정한다.
+  const graded = gradeSignals([...singles, ...comboEvals]);
+  const evaluated = graded.slice(0, singles.length);
+  const combos = graded.slice(singles.length).map((g, i) => ({
+    ...g,
+    members: comboEvals[i].members,
+  }));
 
   const lastIdx = bars.length - 1;
   const nowCount = onCountAt(signals, lastIdx);
@@ -167,11 +195,20 @@ export function analyzeCycle(
 
   // 다중검정: 30개를 재면 '우연일 확률 5% 미만'짜리가 그냥 한두 개 나온다.
   // 그 기대 개수를 실제 개수와 나란히 보여줘야 사용자가 속지 않는다.
-  const significant = evaluated.filter((s) => s.chance != null && s.chance < 0.05).length;
-  const expectedByChance = evaluated.length * 0.05;
+  const tested = graded.length;
+  const rawSignificant = graded.filter((s) => s.chance != null && s.chance < 0.05).length;
+  const afterFdr = graded.filter((s) => s.qValue != null && s.qValue < 0.1).length;
   warnings.push(
-    `지표 ${evaluated.length}개를 한꺼번에 검사했습니다. 여러 개를 동시에 시험하면 그중 일부는 우연히 좋아 보입니다(다중검정). ` +
-      `'우연일 확률 5% 미만'인 지표가 지금 ${significant}개인데, 아무 의미 없는 지표만 ${evaluated.length}개 늘어놔도 평균 ${expectedByChance.toFixed(1)}개는 그렇게 나옵니다.`,
+    `단일 지표 ${evaluated.length}개 + 조합 ${combos.length}개, 모두 ${tested}가지를 한꺼번에 검사했습니다. ` +
+      `여러 개를 동시에 시험하면 그중 일부는 우연히 좋아 보입니다(다중검정). 아무 의미 없는 것만 ${tested}가지 늘어놔도 ` +
+      `평균 ${(tested * 0.05).toFixed(1)}개는 '우연일 확률 5% 미만'이 됩니다 — 지금 그게 ${rawSignificant}개입니다. ` +
+      `그래서 보정한 확률(q값)을 따로 매겼고, 보정 후에도 남는 건 ${afterFdr}개입니다. 등급 판정은 이 q값으로 합니다.`,
+  );
+  const buyable = graded.filter((s) => s.grade === "A").length;
+  warnings.push(
+    buyable
+      ? `여섯 관문을 다 통과한 신호가 ${buyable}개입니다. 그래도 과거 표본이 사이클 ${cycles.length}번뿐이라는 사실은 변하지 않습니다.`
+      : "여섯 관문을 다 통과한 신호는 없습니다. 지금 이 종목에서 '이거 뜨면 사도 된다'고 말할 근거는 데이터에 없습니다.",
   );
   if (cycles.length) {
     warnings.push(
@@ -201,6 +238,7 @@ export function analyzeCycle(
     baseline,
     windowSharePct: windowShare * 100,
     signals: evaluated,
+    combos,
     commonKeys,
     now: { date: bars[lastIdx]?.date ?? "", on: nowCount.on, total: nowCount.total },
     cycleStarts,
@@ -218,6 +256,25 @@ function tradingYears(start: string, end: string): number {
 
 /** LLM에 넘길 사실 요약. 여기 없는 숫자는 모델이 만들어낼 수 없다. */
 export function factsForLlm(report: CycleReport, topN = 6): string {
+  const brief = (s: GradedSignal) => ({
+    지표: s.label,
+    등급: s.grade,
+    통과관문: `${s.passCount}/6`,
+    적중: `${s.hitCount}/${report.cycles.length}`,
+    리드타임: s.medianLeadDays,
+    선행후행: s.timing,
+    남은상승: s.medianCaptureSharePct == null ? null : Math.round(s.medianCaptureSharePct),
+    우연대비: s.lift == null ? null : Number(s.lift.toFixed(2)),
+    신호횟수: s.eventCount,
+    우연일확률: s.chance == null ? null : Number(s.chance.toFixed(4)),
+    보정후q: s.qValue == null ? null : Number(s.qValue.toFixed(4)),
+    앞뒤기간모두통함: s.walkForward?.heldUp ?? null,
+    "신호후1년_최대낙폭중앙값": s.drawdown.medianPct == null ? null : Math.round(s.drawdown.medianPct),
+    "신호후1년_최악낙폭": s.drawdown.worstPct == null ? null : Math.round(s.drawdown.worstPct),
+    기저율대비: s.edge == null ? null : Math.round(s.edge),
+    현재: s.currentlyOn ? "켜짐" : "꺼짐",
+  });
+
   const top = report.signals.slice(0, topN).map((s) => ({
     지표: s.label,
     적중: `${s.hitCount}/${report.cycles.length}`,
@@ -227,6 +284,12 @@ export function factsForLlm(report: CycleReport, topN = 6): string {
     우연대비: s.lift == null ? null : Number(s.lift.toFixed(2)),
     신호횟수: s.eventCount,
     우연일확률: s.chance == null ? null : Number(s.chance.toFixed(4)),
+    보정후q: s.qValue == null ? null : Number(s.qValue.toFixed(4)),
+    등급: s.grade,
+    통과관문: `${s.passCount}/6`,
+    선행후행: s.timing,
+    앞뒤기간모두통함: s.walkForward?.heldUp ?? null,
+    "신호후1년_최대낙폭중앙값": s.drawdown.medianPct == null ? null : Math.round(s.drawdown.medianPct),
     "이미켜짐(적중아님)": s.alreadyOnCount,
     창안신호: s.inWindowEvents.length,
     "1년수익률": s.forward["250"].avg == null ? null : Math.round(s.forward["250"].avg),
@@ -252,6 +315,11 @@ export function factsForLlm(report: CycleReport, topN = 6): string {
     "상승장시작부근이_전체기간에서_차지하는비율": Math.round(report.windowSharePct),
     상위지표: top,
     전사이클적중지표: report.commonKeys.length,
+    "A등급(여섯관문통과)": report.signals.filter((s) => s.grade === "A").map(brief),
+    상위조합: report.combos.slice(0, 3).map(brief),
+    지금켜진A등급: report.signals
+      .filter((s) => s.grade === "A" && s.currentlyOn)
+      .map((s) => s.label),
   });
 }
 

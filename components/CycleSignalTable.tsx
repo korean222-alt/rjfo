@@ -1,34 +1,21 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { GradeBadge, TimingChip, chancePct, chanceTone, leadText } from "@/components/SignalMeta";
 import { HORIZON_LABELS, HORIZONS, SIGNAL_GROUPS } from "@/lib/cycle";
-import type { CycleReport, SignalEvaluation } from "@/lib/cycle";
+import type { CycleReport, GradedSignal } from "@/lib/cycle";
 
-type SortKey = "score" | "hitRate" | "lead" | "edge" | "lift" | "chance";
+type SortKey = "grade" | "score" | "hitRate" | "lead" | "edge" | "lift" | "chance";
 
 const SORTS: { key: SortKey; label: string; hint: string }[] = [
-  { key: "score", label: "종합", hint: "적중률·정확도·남은 상승을 섞은 순위" },
+  { key: "grade", label: "매수 근거 순", hint: "여섯 관문을 몇 개 통과했나" },
+  { key: "score", label: "종합", hint: "적중률·우연대비·우연일 확률·남은 상승을 섞은 순위" },
   { key: "chance", label: "우연 아닌 순", hint: "아무 데나 같은 횟수만큼 찍어도 이만큼 맞을 확률이 낮은 순" },
   { key: "hitRate", label: "적중률", hint: "과거 상승장 시작을 몇 번 잡았나" },
   { key: "lead", label: "빠른 순", hint: "바닥 대비 얼마나 일찍 떴나" },
   { key: "edge", label: "기저율 대비", hint: "아무 날이나 샀을 때보다 얼마나 나았나" },
   { key: "lift", label: "우연대비", hint: "아무 날이나 찍었을 때보다 몇 배 자주 상승장 시작을 가리켰나" },
 ];
-
-/** 20% 미만이면 초록불. 5% 미만은 굵게 — 한눈에 세 단계로 읽히게. */
-export function chanceTone(p: number | null | undefined): string {
-  if (p == null || !Number.isFinite(p)) return "text-muted";
-  if (p < 0.05) return "font-semibold text-up";
-  if (p < 0.2) return "text-up";
-  return "text-down";
-}
-
-export function chancePct(p: number | null | undefined): string {
-  if (p == null || !Number.isFinite(p)) return "—";
-  const pct = p * 100;
-  if (pct < 0.1) return "0.1% 미만";
-  return `${pct < 10 ? pct.toFixed(1) : pct.toFixed(0)}%`;
-}
 
 /**
  * 우연일 확률을 사람이 읽는 말로.
@@ -53,12 +40,6 @@ function toneFor(n: number | null | undefined): string {
   return n > 0 ? "text-up" : n < 0 ? "text-down" : "text-muted";
 }
 
-function leadText(days: number | null): string {
-  if (days == null) return "—";
-  if (days === 0) return "바닥 당일";
-  return days > 0 ? `${days}일 늦게` : `${Math.abs(days)}일 먼저`;
-}
-
 type Props = {
   report: CycleReport;
   selectedKey: string | null;
@@ -66,7 +47,7 @@ type Props = {
 };
 
 export default function CycleSignalTable({ report, selectedKey, onSelect }: Props) {
-  const [sort, setSort] = useState<SortKey>("score");
+  const [sort, setSort] = useState<SortKey>("grade");
   const [group, setGroup] = useState<string>("전체");
   const [onlyOn, setOnlyOn] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -75,8 +56,11 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
     const filtered = report.signals.filter(
       (s) => (group === "전체" || s.group === group) && (!onlyOn || s.currentlyOn),
     );
-    const value = (s: SignalEvaluation): number => {
+    const value = (s: GradedSignal): number => {
       switch (sort) {
+        case "grade":
+          // 관문 통과 수가 같으면 종합 점수로 가른다.
+          return s.passCount * 1000 + s.score;
         case "hitRate":
           return s.hitRate ?? -1;
         case "lead":
@@ -154,7 +138,10 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
         {num(report.windowSharePct, 0, "%")}가 상승장 시작 부근) · 기저대비 = 신호 후 1년 수익률 − 아무 날이나
         골랐을 때(연 {num(report.baseline["250"].avg, 0, "%")}) ·{" "}
         <b className="text-white">우연일 확률</b> = 이 지표의 신호를 통째로 아무 시점으로나 옮겨도 이만큼 맞을 확률
-        (낮을수록 좋고, <span className="text-up">20% 미만이면 초록불</span>, 5% 미만이면 우연으로 보기 어렵습니다)
+        (낮을수록 좋고, <span className="text-up">20% 미만이면 초록불</span>, 5% 미만이면 우연으로 보기 어렵습니다) ·{" "}
+        <b className="text-white">보정후</b> = 지표 수십 개를 한꺼번에 검사한 걸 감안해 다시 매긴 확률(q값). 등급은
+        이 값으로 판정합니다 · <b className="text-white">A~D</b> = 매수 근거 여섯 관문 중 몇 개를 통과했나 (누르면
+        관문별 통과 여부가 나옵니다)
       </p>
 
       <ul className="mt-3 space-y-1.5">
@@ -175,6 +162,7 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                     className={`h-2 w-2 shrink-0 rounded-full ${s.currentlyOn ? "bg-up" : "bg-border"}`}
                   />
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">{s.label}</span>
+                  <GradeBadge grade={s.grade} passCount={s.passCount} />
                   <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted">
                     {s.timeframe}
                   </span>
@@ -182,7 +170,8 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                     {s.hitCount}/{report.cycles.length}
                   </span>
                 </div>
-                <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 pl-4 text-[11px] text-muted">
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-4 text-[11px] text-muted">
+                  <TimingChip timing={s.timing} />
                   <span>리드 {leadText(s.medianLeadDays)}</span>
                   {s.alreadyOnCount ? <span>이미 켜짐 {s.alreadyOnCount}회</span> : null}
                   <span>남은상승 {num(s.medianCaptureSharePct, 0, "%")}</span>
@@ -195,12 +184,32 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                   </span>
                   <span className={toneFor(s.edge)}>기저대비 {signed(s.edge, 0, "%p")}</span>
                   <span className={chanceText(s.chance).tone}>{chanceText(s.chance).text}</span>
+                  <span className={chanceTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
                 </div>
               </button>
 
               {open ? (
                 <div className="space-y-3 border-t border-border px-3 py-3">
                   <p className="text-xs leading-relaxed text-muted">{s.why}</p>
+
+                  <div className="rounded-lg border border-border bg-surface px-2.5 py-2">
+                    <p className="text-[11px] font-semibold">
+                      이거 뜨면 사도 되나 · 관문 {s.passCount}/6 통과 ({s.grade}등급)
+                    </p>
+                    <ul className="mt-1.5 space-y-1">
+                      {s.checks.map((c) => (
+                        <li key={c.label} className="flex gap-2 text-[11px]">
+                          <span className={c.ok ? "text-up" : "text-down"}>{c.ok ? "✓" : "✗"}</span>
+                          <span className={c.ok ? "" : "text-muted"}>{c.label}</span>
+                          <span className="ml-auto text-right text-muted">{c.detail}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
+                      여섯 개를 다 통과해야 A입니다. 다 통과해도 과거 사이클{" "}
+                      {report.cycles.length}번에서 그랬다는 뜻일 뿐입니다.
+                    </p>
+                  </div>
 
                   <div>
                     <p className="mb-1 text-[11px] font-semibold text-muted">사이클별 적중</p>
@@ -255,6 +264,45 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                     </p>
                   </div>
 
+                  {s.walkForward ? (
+                    <div className="rounded-lg border border-border bg-surface px-2.5 py-2">
+                      <p className="text-[11px] font-semibold">
+                        앞뒤 기간을 갈라서 ({s.walkForward.splitDate} 기준)
+                      </p>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted">
+                        앞 {s.walkForward.early.from}~{s.walkForward.early.to}: 적중{" "}
+                        {s.walkForward.early.hits}/{s.walkForward.early.cycles} · 신호{" "}
+                        {s.walkForward.early.events}회 · 우연대비 {num(s.walkForward.early.lift, 1, "배")}
+                        <br />
+                        뒤 {s.walkForward.late.from}~{s.walkForward.late.to}: 적중{" "}
+                        {s.walkForward.late.hits}/{s.walkForward.late.cycles} · 신호{" "}
+                        {s.walkForward.late.events}회 · 우연대비 {num(s.walkForward.late.lift, 1, "배")}
+                      </p>
+                      <p
+                        className={`mt-1 text-[11px] leading-relaxed ${
+                          s.walkForward.heldUp ? "text-up" : "text-down"
+                        }`}
+                      >
+                        {s.walkForward.heldUp
+                          ? "양쪽 기간 모두에서 통했습니다. 옛날 한 번의 대박으로 만들어진 성적이 아닙니다."
+                          : "한쪽 기간에서만 통했습니다. 과거 전체를 뭉쳐서 본 성적은 믿기 어렵습니다."}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  <div className="rounded-lg border border-border bg-surface px-2.5 py-2">
+                    <p className="text-[11px] font-semibold">사고 나서 얼마나 물리나</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-muted">
+                      신호 다음 날 사서 1년 들고 갔다면, 그 사이 최저점까지 보통{" "}
+                      <b className="text-down">{num(s.drawdown.medianPct, 0, "%")}</b>, 가장 나빴을 때{" "}
+                      <b className="text-down">{num(s.drawdown.worstPct, 0, "%")}</b> 물렸습니다. 1년 뒤 수익률이
+                      가장 나빴던 경우는 <b className={toneFor(s.forward["250"].worst)}>
+                        {signed(s.forward["250"].worst, 0, "%")}
+                      </b>
+                      입니다. 평균만 보면 이게 안 보입니다.
+                    </p>
+                  </div>
+
                   <div>
                     <p className="mb-1 text-[11px] font-semibold text-muted">
                       신호 후 수익률 (신호 {s.eventCount}회 · 상승장 시작 부근 아니었던 신호 {s.falseAlarms}회 ·
@@ -266,7 +314,8 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                           <th className="text-left font-normal">기간</th>
                           <th className="text-right font-normal">평균</th>
                           <th className="text-right font-normal">중앙값</th>
-                          <th className="text-right font-normal">플러스 비율</th>
+                          <th className="text-right font-normal">플러스</th>
+                          <th className="text-right font-normal">최악</th>
                           <th className="text-right font-normal">기저율</th>
                         </tr>
                       </thead>
@@ -282,6 +331,9 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                               </td>
                               <td className="py-0.5 text-right">{signed(f.median, 1, "%")}</td>
                               <td className="py-0.5 text-right">{num(f.winRate, 0, "%")}</td>
+                              <td className={`py-0.5 text-right ${toneFor(f.worst)}`}>
+                                {signed(f.worst, 0, "%")}
+                              </td>
                               <td className="py-0.5 text-right text-muted">{signed(b.avg, 1, "%")}</td>
                             </tr>
                           );

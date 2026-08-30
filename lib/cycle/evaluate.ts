@@ -47,6 +47,44 @@ export type ForwardStat = {
   avg: number | null;
   median: number | null;
   winRate: number | null;
+  /** 가장 나빴던 한 번. 평균만 보면 "한 번은 -70%였다"가 안 보인다. */
+  worst: number | null;
+};
+
+/** 신호 뒤에 얼마나 물렸나. 사도 되는지를 가르는 건 평균 수익이 아니라 이쪽이다. */
+export type DrawdownStat = {
+  n: number;
+  /** 신호 다음 날부터 기간 안에 찍은 최저 종가까지의 낙폭(%). 중앙값. */
+  medianPct: number | null;
+  /** 그중 가장 깊었던 것. */
+  worstPct: number | null;
+};
+
+/** 기간을 반으로 갈라 본 성적. 한쪽에서만 좋으면 그건 발견이 아니라 우연이다. */
+export type HalfStat = {
+  from: string;
+  to: string;
+  cycles: number;
+  hits: number;
+  events: number;
+  inWindow: number;
+  /** 그 기간 안에서 '상승장 시작 부근'이 차지하는 비율 (0~1). */
+  windowShare: number;
+  lift: number | null;
+};
+
+export type WalkForward = {
+  splitDate: string;
+  early: HalfStat;
+  late: HalfStat;
+  /**
+   * 앞 기간에서도 뒤 기간에서도 통했나.
+   *
+   * 과거 전체를 한 덩어리로 채점하면, 옛날 한 번의 대박으로 평균이 끌어올려진 지표와
+   * 꾸준히 통한 지표가 구별되지 않는다. 반으로 갈라 양쪽 다 우연대비 1배를 넘고
+   * 뒤 기간 사이클도 잡았을 때만 통과로 본다.
+   */
+  heldUp: boolean;
 };
 
 export type CycleHit = {
@@ -113,8 +151,14 @@ export type SignalEvaluation = SignalDef & {
    */
   chance: number | null;
   forward: Record<string, ForwardStat>;
+  /** 신호 후 1년 안에 얼마나 물렸나. */
+  drawdown: DrawdownStat;
   /** 1년 뒤 평균 수익률 − 기저율. 이게 음수면 신호가 있으나 마나다. */
   edge: number | null;
+  /** 신호가 바닥보다 먼저 떴나(선행), 바닥권이었나(동행), 늦었나(후행). */
+  timing: "선행" | "동행" | "후행" | null;
+  /** 기간을 반으로 갈라 본 성적. 사이클이 2개 미만이면 못 잰다. */
+  walkForward: WalkForward | null;
   currentlyOn: boolean | null;
   lastEventDate: string | null;
   daysSinceLastEvent: number | null;
@@ -152,6 +196,36 @@ function statsAt(bars: EnrichedBar[], indices: number[], horizon: number): Forwa
     avg: mean(rets),
     median: median(rets),
     winRate: rets.length ? (rets.filter((r) => r > 0).length / rets.length) * 100 : null,
+    worst: rets.length ? Math.min(...rets) : null,
+  };
+}
+
+/**
+ * 신호 다음 날부터 horizon 거래일 안의 최대 낙폭.
+ *
+ * "1년 뒤 +80%"라는 숫자는 그 사이에 -55%를 견뎠어야 나온 것일 수 있다.
+ * 실제로 들고 갈 수 있느냐는 그쪽에 달렸으므로 따로 잰다.
+ */
+export function drawdownAfter(
+  bars: EnrichedBar[],
+  indices: number[],
+  horizon: number,
+): DrawdownStat {
+  const dds: number[] = [];
+  for (const i of indices) {
+    const base = bars[i].close;
+    if (!(base > 0)) continue;
+    const end = Math.min(bars.length - 1, i + horizon);
+    if (end <= i) continue;
+    let low = Infinity;
+    for (let j = i + 1; j <= end; j++) low = Math.min(low, bars[j].close);
+    if (!Number.isFinite(low)) continue;
+    dds.push(Math.min(0, (low / base - 1) * 100));
+  }
+  return {
+    n: dds.length,
+    medianPct: median(dds),
+    worstPct: dds.length ? Math.min(...dds) : null,
   };
 }
 
@@ -278,6 +352,80 @@ export function circularShiftP(events: number[], mask: Uint8Array): number | nul
   return tried ? atLeast / tried : null;
 }
 
+/**
+ * 리드타임을 사람 말로 한 단계.
+ *
+ * 바닥을 미리 맞히는 지표는 사실상 없다. 그래도 '바닥 즈음'과 '한참 뒤'는 전혀 다른
+ * 물건이라, 실제로 매수 타이밍에 쓸 수 있는지를 이 한 단어로 구분한다.
+ */
+export function timingOf(medianLeadDays: number | null): "선행" | "동행" | "후행" | null {
+  if (medianLeadDays == null) return null;
+  if (medianLeadDays <= -5) return "선행";
+  if (medianLeadDays <= 20) return "동행";
+  return "후행";
+}
+
+/** 한쪽 기간만 잘라서 다시 채점. windowShare도 그 기간 기준으로 다시 잰다. */
+function halfStat(
+  bars: EnrichedBar[],
+  lo: number,
+  hi: number,
+  cycles: Cycle[],
+  cycleHits: CycleHit[],
+  events: number[],
+  mask: Uint8Array,
+): HalfStat {
+  let covered = 0;
+  for (let i = lo; i <= hi; i++) covered += mask[i];
+  const span = hi - lo + 1;
+  const share = span > 0 ? covered / span : 0;
+
+  const inHalf = cycles.map((c) => c.troughIdx >= lo && c.troughIdx <= hi);
+  const ev = events.filter((e) => e >= lo && e <= hi);
+  const inWindow = ev.filter((e) => mask[e] === 1).length;
+  const precision = ev.length ? inWindow / ev.length : null;
+
+  return {
+    from: bars[lo].date,
+    to: bars[hi].date,
+    cycles: inHalf.filter(Boolean).length,
+    hits: cycleHits.filter((h, i) => inHalf[i] && h.hit).length,
+    events: ev.length,
+    inWindow,
+    windowShare: share,
+    lift: precision != null && share > 0 ? precision / share : null,
+  };
+}
+
+/**
+ * 사이클 목록의 가운데 바닥을 기준으로 기간을 두 동강 낸다.
+ * 바닥에서 자르는 이유: 한 사이클이 두 기간에 걸치면 양쪽 다 반쪽 성적이 나온다.
+ */
+export function walkForwardStats(
+  bars: EnrichedBar[],
+  cycles: Cycle[],
+  cycleHits: CycleHit[],
+  events: number[],
+  mask: Uint8Array,
+): WalkForward | null {
+  if (cycles.length < 2 || bars.length < 4) return null;
+  const splitIdx = cycles[Math.floor(cycles.length / 2)].troughIdx;
+  if (splitIdx <= 0 || splitIdx >= bars.length - 1) return null;
+
+  const early = halfStat(bars, 0, splitIdx - 1, cycles, cycleHits, events, mask);
+  const late = halfStat(bars, splitIdx, bars.length - 1, cycles, cycleHits, events, mask);
+  const heldUp =
+    early.cycles > 0 &&
+    late.cycles > 0 &&
+    late.hits > 0 &&
+    early.lift != null &&
+    late.lift != null &&
+    early.lift >= 1 &&
+    late.lift >= 1;
+
+  return { splitDate: bars[splitIdx].date, early, late, heldUp };
+}
+
 function lastAtOrBefore(events: number[], idx: number): number | null {
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i] <= idx) return events[i];
@@ -381,6 +529,7 @@ export function evaluateSignal(
 
   const forward: Record<string, ForwardStat> = {};
   for (const h of HORIZONS) forward[String(h)] = statsAt(bars, events, h);
+  const drawdown = drawdownAfter(bars, events, 250);
 
   const edge =
     forward["250"].avg != null && baseline["250"].avg != null
@@ -393,6 +542,10 @@ export function evaluateSignal(
   const captureMedian = median(
     hits.map((h) => h.captureSharePct).filter((v): v is number => v != null),
   );
+  const medianLeadDays = median(
+    hits.map((h) => h.leadDays).filter((v): v is number => v != null),
+  );
+  const walkForward = walkForwardStats(bars, cycles, cycleHits, events, mask);
 
   // 순위 = 얼마나 잡았나(적중률) + 아무 날이나 찍은 것보다 나은가(우연대비) +
   // 그게 우연이 아닌가(우연일 확률) + 잡았을 때 먹을 게 남아 있었나(남은 상승).
@@ -417,14 +570,17 @@ export function evaluateSignal(
     hitCount: hits.length,
     hitRate,
     alreadyOnCount,
-    medianLeadDays: median(hits.map((h) => h.leadDays).filter((v): v is number => v != null)),
+    medianLeadDays,
     medianCaptureSharePct: captureMedian,
     falseAlarms,
     precision,
     lift,
     chance,
     forward,
+    drawdown,
     edge,
+    timing: timingOf(medianLeadDays),
+    walkForward,
     currentlyOn,
     lastEventDate: lastEvent != null ? bars[lastEvent].date : null,
     daysSinceLastEvent: lastEvent != null ? lastIdx - lastEvent : null,

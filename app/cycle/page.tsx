@@ -3,7 +3,8 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BtcSpotHeader from "@/components/BtcSpotHeader";
-import CycleSignalTable, { chancePct, chanceTone } from "@/components/CycleSignalTable";
+import CycleSignalTable from "@/components/CycleSignalTable";
+import { GradeBadge, TimingChip, chancePct, chanceTone, leadText } from "@/components/SignalMeta";
 import NavTabs from "@/components/NavTabs";
 import TickerInput from "@/components/TickerInput";
 import TimeframeSelect from "@/components/TimeframeSelect";
@@ -108,9 +109,15 @@ export default function CyclePage() {
 
   const report = payload?.report ?? null;
 
+  /** 성적표(단일) + 조합. 조합은 그릴 선이 없어 마커만 찍힌다. */
+  const allSignals = useMemo(
+    () => (report ? [...report.signals, ...report.combos] : []),
+    [report],
+  );
+
   const selectedSignal = useMemo(
-    () => (report && selectedKey ? report.signals.find((s) => s.key === selectedKey) ?? null : null),
-    [report, selectedKey],
+    () => (selectedKey ? allSignals.find((s) => s.key === selectedKey) ?? null : null),
+    [allSignals, selectedKey],
   );
 
   // 지표 선을 그리려면 파생값(OBV 기울기 등)이 필요하다. 서버 채점과 같은 함수를 쓴다.
@@ -133,13 +140,13 @@ export default function CyclePage() {
   /** 성적표 순위(= 종합 순) 그대로 앞뒤로 넘긴다. */
   const stepSignal = useCallback(
     (delta: number) => {
-      if (!report?.signals.length) return;
-      const list = report.signals;
+      if (!allSignals.length) return;
+      const list = allSignals;
       const at = selectedKey ? list.findIndex((s) => s.key === selectedKey) : -1;
       const next = at < 0 ? (delta > 0 ? 0 : list.length - 1) : (at + delta + list.length) % list.length;
       setSelectedKey(list[next].key);
     },
-    [report, selectedKey],
+    [allSignals, selectedKey],
   );
 
   /**
@@ -211,6 +218,22 @@ export default function CyclePage() {
   const commonSignals = useMemo(
     () => (report ? report.signals.filter((s) => report.commonKeys.includes(s.key)) : []),
     [report],
+  );
+
+  /**
+   * 매수 근거가 있는 신호 = 여섯 관문을 다 통과한 것(A).
+   * 하나도 없으면 그 사실을 그대로 보여준다. 억지로 순위 1위를 추천하지 않는다.
+   */
+  const buySignals = useMemo(
+    () =>
+      allSignals
+        .filter((s) => s.grade === "A")
+        .sort((a, b) => (a.qValue ?? 1) - (b.qValue ?? 1)),
+    [allSignals],
+  );
+  const nearMiss = useMemo(
+    () => allSignals.filter((s) => s.grade === "B").sort((a, b) => (a.qValue ?? 1) - (b.qValue ?? 1)),
+    [allSignals],
   );
 
   return (
@@ -396,6 +419,78 @@ export default function CyclePage() {
             ) : null}
           </section>
 
+          {/* 매수 근거가 있는 신호 */}
+          <section className="rounded-2xl border border-up/30 bg-up/5 p-4">
+            <div className="flex items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold">사도 될 근거가 있는 신호</h2>
+              <span className="text-xs text-muted">여섯 관문 전부 통과</span>
+            </div>
+
+            {buySignals.length ? (
+              <ul className="mt-2.5 space-y-1.5">
+                {buySignals.map((s) => (
+                  <li key={s.key}>
+                    <button
+                      type="button"
+                      onClick={() => showSignal(s.key)}
+                      className="w-full rounded-lg px-1 py-1 text-left active:bg-bg"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span
+                          aria-hidden
+                          className={`h-2 w-2 shrink-0 rounded-full ${s.currentlyOn ? "bg-up" : "bg-border"}`}
+                        />
+                        <span className="min-w-0 flex-1 truncate text-sm">{s.label}</span>
+                        <GradeBadge grade={s.grade} passCount={s.passCount} />
+                        <span
+                          className={`shrink-0 text-[11px] ${s.currentlyOn ? "text-up" : "text-muted"}`}
+                        >
+                          {s.currentlyOn ? "지금 켜짐" : "꺼짐"}
+                        </span>
+                        <span aria-hidden className="shrink-0 text-[11px] text-muted">
+                          📈
+                        </span>
+                      </span>
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-3 pl-4 text-[11px] text-muted">
+                        <TimingChip timing={s.timing} />
+                        <span>
+                          적중 {s.hitCount}/{report.cycles.length}
+                        </span>
+                        <span>리드 {leadText(s.medianLeadDays)}</span>
+                        <span>
+                          남은상승{" "}
+                          {s.medianCaptureSharePct == null
+                            ? "—"
+                            : `${s.medianCaptureSharePct.toFixed(0)}%`}
+                        </span>
+                        <span className={chanceTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-sm leading-relaxed text-muted">
+                여섯 관문을 다 통과한 신호가 <b className="text-white">없습니다</b>. 이 종목·이 기간에서는
+                &lsquo;이거 뜨면 사도 된다&rsquo;고 말할 근거가 데이터에 없다는 뜻입니다.
+                {nearMiss.length ? (
+                  <>
+                    {" "}
+                    하나만 못 넘긴 신호(B등급)는 {nearMiss.length}개 있습니다: {nearMiss.slice(0, 3).map((s) => s.label).join(", ")}
+                    {nearMiss.length > 3 ? " 외" : ""}.
+                  </>
+                ) : null}
+              </p>
+            )}
+
+            <p className="mt-2.5 border-t border-border pt-2 text-[11px] leading-relaxed text-muted">
+              여섯 관문: ① 다중검정 보정 후에도 우연이 아님 ② 아무 날이나 찍은 것보다 1.5배 이상 자주 상승장
+              시작을 가리킴 ③ 신호 후 1년 수익률이 그냥 산 것보다 높음 ④ 앞 기간·뒤 기간 모두에서 통함
+              ⑤ 상승장 시작을 절반 이상 잡음 ⑥ 떴을 때 그 사이클 상승분이 절반 이상 남아 있었음. 성적표에서
+              지표를 누르면 관문별 통과 여부가 나옵니다.
+            </p>
+          </section>
+
           {/* 사이클 목록 + 차트 */}
           <section className="rounded-2xl border border-border bg-surface p-4">
             <div className="flex items-baseline justify-between">
@@ -457,6 +552,16 @@ export default function CyclePage() {
                     className="min-w-0 flex-1 rounded-lg border border-border bg-surface px-2 py-2 text-sm"
                   >
                     <option value="">지표 없음 (캔들만)</option>
+                    {report.combos.length ? (
+                      <optgroup label="조합 (둘 다 켜짐)">
+                        {report.combos.slice(0, 10).map((sig) => (
+                          <option key={sig.key} value={sig.key}>
+                            {sig.currentlyOn ? "● " : "○ "}[{sig.grade}] {sig.label} ·{" "}
+                            {sig.hitCount}/{report.cycles.length}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null}
                     {SIGNAL_GROUPS.map((g) => {
                       const inGroup = report.signals.filter((sig) => sig.group === g);
                       if (!inGroup.length) return null;
@@ -464,8 +569,8 @@ export default function CyclePage() {
                         <optgroup key={g} label={g}>
                           {inGroup.map((sig) => (
                             <option key={sig.key} value={sig.key}>
-                              {sig.currentlyOn ? "● " : "○ "}
-                              {sig.label} · {sig.hitCount}/{report.cycles.length}
+                              {sig.currentlyOn ? "● " : "○ "}[{sig.grade}] {sig.label} ·{" "}
+                              {sig.hitCount}/{report.cycles.length}
                             </option>
                           ))}
                         </optgroup>
@@ -484,7 +589,7 @@ export default function CyclePage() {
                 {selectedSignal ? (
                   <p className="mt-2 px-0.5 text-[11px] leading-relaxed text-muted">
                     <b className="text-white">
-                      {report.signals.findIndex((sig) => sig.key === selectedSignal.key) + 1}위
+                      {selectedSignal.grade}등급 {selectedSignal.passCount}/6
                     </b>{" "}
                     · {plot?.rule || selectedSignal.why} · 지금{" "}
                     <b className={selectedSignal.currentlyOn ? "text-up" : "text-muted"}>
@@ -612,6 +717,55 @@ export default function CyclePage() {
               </p>
             )}
           </section>
+
+          {/* 조합 신호 */}
+          {report.combos.length ? (
+            <section className="rounded-2xl border border-border bg-surface p-4">
+              <div className="flex items-baseline justify-between gap-2">
+                <h2 className="text-sm font-semibold">조합 신호 (둘 다 켜지면)</h2>
+                <span className="text-xs text-muted">{report.combos.length}개 중 상위 6</span>
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
+                상위 지표들을 성격이 다른 것끼리 짝지어 &lsquo;둘 다 켜진 첫날&rsquo;을 신호로 채점했습니다.
+                겹치면 신호가 줄어드는 대신 헛신호가 걸러집니다. 조합도 단일 지표와 같은 보정 풀에 넣었습니다.
+              </p>
+              <ul className="mt-2.5 space-y-1.5">
+                {report.combos.slice(0, 6).map((s) => (
+                  <li key={s.key}>
+                    <button
+                      type="button"
+                      onClick={() => showSignal(s.key)}
+                      className="w-full rounded-lg border border-border bg-bg px-2.5 py-2 text-left active:bg-surface"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span
+                          aria-hidden
+                          className={`h-2 w-2 shrink-0 rounded-full ${s.currentlyOn ? "bg-up" : "bg-border"}`}
+                        />
+                        <span className="min-w-0 flex-1 text-[13px] leading-snug">{s.label}</span>
+                        <GradeBadge grade={s.grade} passCount={s.passCount} />
+                      </span>
+                      <span className="mt-1 flex flex-wrap items-center gap-x-3 pl-4 text-[11px] text-muted">
+                        <TimingChip timing={s.timing} />
+                        <span>
+                          적중 {s.hitCount}/{report.cycles.length}
+                        </span>
+                        <span>신호 {s.eventCount}회</span>
+                        <span>리드 {leadText(s.medianLeadDays)}</span>
+                        <span>
+                          남은상승{" "}
+                          {s.medianCaptureSharePct == null
+                            ? "—"
+                            : `${s.medianCaptureSharePct.toFixed(0)}%`}
+                        </span>
+                        <span className={chanceTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
 
           <CycleSignalTable report={report} selectedKey={selectedKey} onSelect={showSignal} />
 

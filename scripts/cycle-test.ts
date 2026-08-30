@@ -19,6 +19,8 @@ import {
   DEFAULT_WINDOW,
   baselineStats,
 } from "../lib/cycle/evaluate";
+import { andState } from "../lib/cycle/combos";
+import { fdrQValues } from "../lib/cycle/grade";
 import { toMonthly, toWeekly, projectToDaily, barsForView, snapDatesToView } from "../lib/cycle/resample";
 import { ema, macd, rsi, sma } from "../lib/cycle/ta";
 import { narrate } from "../lib/cycle/narrative";
@@ -667,10 +669,130 @@ console.log("\n[11] 적중 판정 (이미 켜짐, 창 겹침 없음)");
   );
 }
 
-// ── 12. 실데이터 (인자로 티커를 주면) ─────────────────────────────
+// ── 12. 매수 등급 · 다중검정 보정 · 조합 ──────────────────────────
+console.log("\n[12] 매수 등급 / q값 / 조합");
+{
+  // BH 보정: 손으로 계산해서 대조.
+  const q = fdrQValues([0.01, 0.02, 0.5, null]);
+  approx(q[0], Math.min(0.01 * 3, 0.02 * 3 / 2, 0.5), 1e-12, "q(0.01) = min(0.03, 0.03, 0.5)");
+  approx(q[1], Math.min(0.02 * 3 / 2, 0.5), 1e-12, "q(0.02) = 0.03");
+  approx(q[2], 0.5, 1e-12, "q(0.5) = 0.5");
+  assert(q[3] === null, "p를 못 잰 지표는 q도 없다");
+  const mono = fdrQValues([0.001, 0.9, 0.02]);
+  assert(
+    mono[0]! <= mono[2]! && mono[2]! <= mono[1]!,
+    `q값은 p 순서를 뒤집지 않는다 (${mono.map((v) => v?.toFixed(3)).join(", ")})`,
+  );
+  assert(
+    fdrQValues([0.04]).every((v) => v != null && v >= 0.04),
+    "q값은 항상 p값 이상",
+  );
+
+  // AND 상태: 한쪽이 null이면 결과도 null.
+  const a: (boolean | null)[] = [null, true, true, false, true];
+  const b: (boolean | null)[] = [true, null, true, true, false];
+  const and = andState(a, b);
+  assert(and[0] === null && and[1] === null, "한쪽이라도 값이 없으면 조합도 값 없음");
+  assert(and[2] === true && and[3] === false && and[4] === false, "둘 다 켜져야 켜짐");
+
+  // 실제 파이프라인에서 나온 조합이 정말 두 지표의 AND인지.
+  const closes: number[] = [100];
+  const ramp = (to: number, days: number) => {
+    const from = closes[closes.length - 1];
+    for (let i = 1; i <= days; i++) {
+      closes.push(from * Math.pow(to / from, i / days) * (1 + Math.sin(i * 1.7) * 0.02));
+    }
+  };
+  ramp(1200, 400);
+  ramp(200, 300);
+  ramp(2500, 500);
+  ramp(700, 350);
+  ramp(6000, 600);
+  const bars = enrich(barsFromCloses(closes));
+  const report = analyzeCycle("BTC-USD", bars);
+  const sigs = buildSignals(bars);
+
+  assert(report.combos.length > 0, `조합이 만들어진다 (실제 ${report.combos.length}개)`);
+  let andOk = true;
+  let groupOk = true;
+  for (const c of report.combos) {
+    const a = sigs.find((x) => x.key === c.members[0]);
+    const b = sigs.find((x) => x.key === c.members[1]);
+    if (!a || !b) {
+      andOk = false;
+      continue;
+    }
+    if (a.group === b.group) groupOk = false;
+    if (eventIndices(andState(a.state, b.state)).length !== c.eventCount) andOk = false;
+  }
+  assert(andOk, "조합의 신호 횟수 = 두 지표 AND의 신호 횟수");
+  assert(groupOk, "같은 성격끼리는 조합하지 않는다");
+  assert(
+    report.combos.every((c) => c.label.includes(" + ")),
+    "조합 이름에 구성 지표가 둘 다 들어간다",
+  );
+  assert(
+    report.signals.every((s) => s.qValue == null || s.chance == null || s.qValue >= s.chance),
+    "보정 후 q값은 원래 p값보다 작지 않다",
+  );
+  assert(
+    report.signals.every((s) => (s.grade === "A") === (s.passCount === 6)),
+    "A등급 = 여섯 관문 전부 통과",
+  );
+  assert(
+    report.signals.every((s) => s.checks.length === 6),
+    "모든 지표에 관문 6개가 채점되어 있다",
+  );
+  const rsiM = report.signals.find((s) => s.key === "rsi_m50");
+  assert(rsiM != null, "월봉 RSI 50 지표가 배터리에 있다");
+  assert(rsiM?.timeframe === "월봉", "월봉 RSI는 월봉 지표");
+  assert(
+    report.signals.every((s) => s.walkForward == null || s.walkForward.early.to < s.walkForward.late.from),
+    "앞뒤 기간이 겹치지 않는다",
+  );
+  assert(
+    report.signals.every((s) => s.drawdown.worstPct == null || s.drawdown.worstPct <= 0),
+    "낙폭은 0 이하",
+  );
+}
+
+// ── 13. 랜덤워크에서는 매수 등급이 나오면 안 된다 ──────────────────
+//
+// 이 앱에서 제일 무서운 실패는 "아무 정보도 없는 시세인데 A등급이 나오는" 것이다.
+// 그러면 등급은 도장 찍어주는 기계일 뿐이다. 정보가 없는 시계열로 그걸 확인한다.
+console.log("\n[13] 랜덤워크 대조군 (아무 신호도 A가 되면 안 된다)");
+{
+  const mulberry = (seed: number) => () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  for (const seed of [1, 2026]) {
+    const rand = mulberry(seed);
+    const closes = [1000];
+    for (let i = 1; i < 3000; i++) {
+      const z = rand() + rand() + rand() + rand() + rand() + rand() - 3;
+      closes.push(Math.max(1, closes[i - 1] * Math.exp(0.0006 + 0.04 * z)));
+    }
+    const bars = enrich(barsFromCloses(closes));
+    const report = analyzeCycle("BTC-USD", bars);
+    const aGrade = [...report.signals, ...report.combos].filter((s) => s.grade === "A");
+    assert(
+      aGrade.length === 0,
+      `seed ${seed}: 랜덤워크에 A등급 없음 (실제 ${aGrade.length}개: ${aGrade.map((s) => s.label).join(", ")})`,
+    );
+    const q = [...report.signals, ...report.combos].filter((s) => s.qValue != null && s.qValue < 0.1);
+    assert(q.length <= 2, `seed ${seed}: 보정 후 유의한 게 거의 없다 (실제 ${q.length}개)`);
+  }
+}
+
+// ── 14. 실데이터 (인자로 티커를 주면) ─────────────────────────────
 const ticker = process.argv[2];
 if (ticker) {
-  console.log(`\n[12] 실데이터: ${ticker}`);
+  console.log(`\n[14] 실데이터: ${ticker}`);
   (async () => {
     const { loadBars, MAX_YEARS } = await import("../lib/data");
     const { normalizeTicker } = await import("../lib/data/provider");
