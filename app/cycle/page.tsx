@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BtcSpotHeader from "@/components/BtcSpotHeader";
-import CycleSignalTable from "@/components/CycleSignalTable";
+import CycleSignalTable, { chancePct, chanceTone } from "@/components/CycleSignalTable";
 import NavTabs from "@/components/NavTabs";
 import TickerInput from "@/components/TickerInput";
 import TimeframeSelect from "@/components/TimeframeSelect";
@@ -151,10 +151,7 @@ export default function CyclePage() {
    */
   const MAX_MARKERS = 60;
   const matchedDates = useMemo(
-    () =>
-      selectedSignal
-        ? selectedSignal.cycleHits.map((h) => h.eventDate).filter((d): d is string => d != null)
-        : [],
+    () => selectedSignal?.inWindowEvents ?? [],
     [selectedSignal],
   );
   const markerDates = useMemo(() => {
@@ -496,25 +493,12 @@ export default function CyclePage() {
                     <br />
                     과거 상승장 시작 {report.cycles.length}번 중{" "}
                     <b className="text-white">{selectedSignal.hitCount}번</b> 적중(
-                    {selectedSignal.hitRate == null ? "—" : `${selectedSignal.hitRate.toFixed(0)}%`}) · 신호{" "}
-                    {selectedSignal.eventCount}회 · 우연일 확률{" "}
-                    <b
-                      className={
-                        selectedSignal.chance == null
-                          ? "text-muted"
-                          : selectedSignal.chance < 0.05
-                            ? "text-up"
-                            : selectedSignal.chance < 0.2
-                              ? "text-white"
-                              : "text-down"
-                      }
-                    >
-                      {selectedSignal.chance == null
-                        ? "—"
-                        : selectedSignal.chance < 0.001
-                          ? "0.1% 미만"
-                          : `${(selectedSignal.chance * 100).toFixed(selectedSignal.chance < 0.1 ? 1 : 0)}%`}
-                    </b>
+                    {selectedSignal.hitRate == null ? "—" : `${selectedSignal.hitRate.toFixed(0)}%`})
+                    {selectedSignal.alreadyOnCount
+                      ? ` · 이미 켜짐 ${selectedSignal.alreadyOnCount}회(적중 아님)`
+                      : ""}{" "}
+                    · 신호 {selectedSignal.eventCount}회 · 우연일 확률{" "}
+                    <b className={chanceTone(selectedSignal.chance)}>{chancePct(selectedSignal.chance)}</b>
                   </p>
                 ) : (
                   <p className="mt-2 px-0.5 text-[11px] text-muted">
@@ -574,39 +558,57 @@ export default function CyclePage() {
               적중률 100% ({report.cycles.length}/{report.cycles.length})
             </h2>
             {commonSignals.length ? (
-              <ul className="mt-2.5 space-y-1.5">
-                {commonSignals.map((s) => (
-                  <li key={s.key}>
-                    <button
-                      type="button"
-                      onClick={() => showSignal(s.key)}
-                      className="flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left text-sm active:bg-bg"
-                    >
-                    <span
-                      aria-hidden
-                      className={`h-2 w-2 shrink-0 rounded-full ${s.currentlyOn ? "bg-up" : "bg-border"}`}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{s.label}</span>
-                    <span className="shrink-0 text-[11px] text-muted">
-                      {s.medianLeadDays == null
-                        ? "—"
-                        : s.medianLeadDays >= 0
-                          ? `${s.medianLeadDays}일 늦게`
-                          : `${Math.abs(s.medianLeadDays)}일 먼저`}
-                    </span>
-                    <span className="shrink-0 text-[11px] text-muted">
-                      {s.currentlyOn ? "켜짐" : "꺼짐"}
-                    </span>
-                    <span aria-hidden className="shrink-0 text-[11px] text-muted">
-                      📈
-                    </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <ul className="mt-2.5 space-y-1.5">
+                  {commonSignals.map((s) => (
+                    <li key={s.key}>
+                      <button
+                        type="button"
+                        onClick={() => showSignal(s.key)}
+                        className="w-full rounded-lg px-1 py-1 text-left text-sm active:bg-bg"
+                      >
+                        <span className="flex items-center gap-2">
+                          <span
+                            aria-hidden
+                            className={`h-2 w-2 shrink-0 rounded-full ${s.currentlyOn ? "bg-up" : "bg-border"}`}
+                          />
+                          <span className="min-w-0 flex-1 truncate">{s.label}</span>
+                          <span className="shrink-0 text-sm font-bold">
+                            {s.hitCount}/{report.cycles.length}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-muted">
+                            {s.currentlyOn ? "켜짐" : "꺼짐"}
+                          </span>
+                          <span aria-hidden className="shrink-0 text-[11px] text-muted">
+                            📈
+                          </span>
+                        </span>
+                        <span className="mt-0.5 flex flex-wrap gap-x-3 pl-4 text-[11px] text-muted">
+                          <span>
+                            리드{" "}
+                            {s.medianLeadDays == null
+                              ? "—"
+                              : s.medianLeadDays >= 0
+                                ? `${s.medianLeadDays}일 늦게`
+                                : `${Math.abs(s.medianLeadDays)}일 먼저`}
+                          </span>
+                          <span>신호 {s.eventCount}회</span>
+                          <span className={chanceTone(s.chance)}>우연일 확률 {chancePct(s.chance)}</span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                  {report.cycles.length}번을 전부, 그 부근에서 <b className="text-white">새로 켜지면서</b> 잡은
+                  지표입니다. 표본이 {report.cycles.length}번뿐이라 100%라는 숫자만으로는 부족합니다 —{" "}
+                  <span className="text-up">우연일 확률이 초록불(20% 미만)</span>인지 같이 보세요.
+                </p>
+              </>
             ) : (
               <p className="mt-2 text-sm text-muted">
-                모든 전환을 빠짐없이 잡은 지표는 없습니다. 아래 성적표에서 적중률 순으로 보세요.
+                {report.cycles.length}번 전부를 새로 켜지면서 잡은 지표는 없습니다. 아래 성적표에서 적중률 순으로
+                보세요.
               </p>
             )}
           </section>

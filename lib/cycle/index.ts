@@ -64,7 +64,10 @@ export type CycleReport = {
   /** 전체 기간 중 '상승장 시작 부근'이 차지하는 비율(%). 지표 lift의 기준선. */
   windowSharePct: number;
   signals: SignalEvaluation[];
-  /** 과거 상승장 시작을 전부 잡아낸 지표들 (사용자가 말한 "공통으로 가리킨 것"). */
+  /**
+   * 과거 상승장 시작을 하나도 빠짐없이 '새로 켜져서' 잡아낸 지표들.
+   * 바닥에 그냥 켜져 있던 것(alreadyOn)은 여기 못 들어온다.
+   */
   commonKeys: string[];
   now: { date: string; on: number; total: number };
   cycleStarts: CycleStartSnapshot[];
@@ -158,6 +161,9 @@ export function analyzeCycle(
       `사이클 표본 ${cycles.length}개. 이 정도 표본에서는 100% 적중도 우연일 수 있습니다.`,
     );
   }
+  warnings.push(
+    "적중은 '상승장 시작 부근에서 새로 켜진 것'만 셉니다. 하락장 내내 켜진 채로 바닥을 지나온 지표는 적중이 아니라 '이미 켜짐'으로 따로 표시합니다 — 그렇게 세지 않으면 늘 켜져 있는 지표가 전부 적중률 100%가 됩니다.",
+  );
 
   // 다중검정: 30개를 재면 '우연일 확률 5% 미만'짜리가 그냥 한두 개 나온다.
   // 그 기대 개수를 실제 개수와 나란히 보여줘야 사용자가 속지 않는다.
@@ -221,7 +227,8 @@ export function factsForLlm(report: CycleReport, topN = 6): string {
     우연대비: s.lift == null ? null : Number(s.lift.toFixed(2)),
     신호횟수: s.eventCount,
     우연일확률: s.chance == null ? null : Number(s.chance.toFixed(4)),
-    이미켜짐적중: s.alreadyOnCount,
+    "이미켜짐(적중아님)": s.alreadyOnCount,
+    창안신호: s.inWindowEvents.length,
     "1년수익률": s.forward["250"].avg == null ? null : Math.round(s.forward["250"].avg),
     "기저율대비": s.edge == null ? null : Math.round(s.edge),
     현재: s.currentlyOn ? "켜짐" : "꺼짐",

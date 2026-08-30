@@ -15,17 +15,27 @@ const SORTS: { key: SortKey; label: string; hint: string }[] = [
   { key: "lift", label: "우연대비", hint: "아무 날이나 찍었을 때보다 몇 배 자주 상승장 시작을 가리켰나" },
 ];
 
+/** 20% 미만이면 초록불. 5% 미만은 굵게 — 한눈에 세 단계로 읽히게. */
+export function chanceTone(p: number | null | undefined): string {
+  if (p == null || !Number.isFinite(p)) return "text-muted";
+  if (p < 0.05) return "font-semibold text-up";
+  if (p < 0.2) return "text-up";
+  return "text-down";
+}
+
+export function chancePct(p: number | null | undefined): string {
+  if (p == null || !Number.isFinite(p)) return "—";
+  const pct = p * 100;
+  if (pct < 0.1) return "0.1% 미만";
+  return `${pct < 10 ? pct.toFixed(1) : pct.toFixed(0)}%`;
+}
+
 /**
  * 우연일 확률을 사람이 읽는 말로.
  * 숫자만 주면 0.03과 0.30의 차이를 눈으로 못 읽는다 — 색과 문구를 같이 준다.
  */
 function chanceText(p: number | null | undefined): { text: string; tone: string } {
-  if (p == null || !Number.isFinite(p)) return { text: "우연일 확률 —", tone: "text-muted" };
-  const pct = p * 100;
-  const shown = pct < 0.1 ? "0.1% 미만" : `${pct < 10 ? pct.toFixed(1) : pct.toFixed(0)}%`;
-  if (p < 0.05) return { text: `우연일 확률 ${shown}`, tone: "text-up" };
-  if (p < 0.2) return { text: `우연일 확률 ${shown}`, tone: "" };
-  return { text: `우연일 확률 ${shown}`, tone: "text-down" };
+  return { text: `우연일 확률 ${chancePct(p)}`, tone: chanceTone(p) };
 }
 
 function num(n: number | null | undefined, digits = 0, suffix = ""): string {
@@ -137,13 +147,14 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
       </div>
 
       <p className="mt-3 text-[11px] leading-relaxed text-muted">
-        적중률 = 과거 상승장 시작 {report.cycles.length}번 중 바닥 당시 켜져 있었거나 직후 창에서 켜진 횟수 · 리드 = 실제 바닥 대비 신호 시점 ·
-        남은상승 = 새로 켜진 시점에 그 사이클 상승분이 얼마나 남아 있었나 ·{" "}
+        적중률 = 과거 상승장 시작 {report.cycles.length}번 중 그 부근에서 <b className="text-white">새로 켜져서</b>{" "}
+        잡은 횟수(하락장 내내 켜진 채 바닥을 지나온 건 적중이 아니라 &lsquo;이미 켜짐&rsquo;) · 리드 = 실제 바닥 대비
+        신호 시점 · 남은상승 = 신호 시점에 그 사이클 상승분이 얼마나 남아 있었나 ·{" "}
         <b className="text-white">우연대비</b> = 아무 날이나 찍었을 때 대비 배수(1.0이면 우연과 같음, 전체 기간의{" "}
         {num(report.windowSharePct, 0, "%")}가 상승장 시작 부근) · 기저대비 = 신호 후 1년 수익률 − 아무 날이나
         골랐을 때(연 {num(report.baseline["250"].avg, 0, "%")}) ·{" "}
-        <b className="text-white">우연일 확률</b> = 아무 데나 같은 횟수만큼 찍는 가짜 지표가 이만큼 맞을 확률
-        (낮을수록 좋고, 5% 미만이면 우연으로 보기 어렵습니다)
+        <b className="text-white">우연일 확률</b> = 이 지표의 신호를 통째로 아무 시점으로나 옮겨도 이만큼 맞을 확률
+        (낮을수록 좋고, <span className="text-up">20% 미만이면 초록불</span>, 5% 미만이면 우연으로 보기 어렵습니다)
       </p>
 
       <ul className="mt-3 space-y-1.5">
@@ -173,6 +184,7 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                 </div>
                 <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 pl-4 text-[11px] text-muted">
                   <span>리드 {leadText(s.medianLeadDays)}</span>
+                  {s.alreadyOnCount ? <span>이미 켜짐 {s.alreadyOnCount}회</span> : null}
                   <span>남은상승 {num(s.medianCaptureSharePct, 0, "%")}</span>
                   <span
                     className={
@@ -196,17 +208,18 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                       {s.cycleHits.map((h) => (
                         <li key={h.troughDate} className="flex flex-wrap gap-x-2 text-[11px]">
                           <span className="text-muted">{h.troughDate} 바닥 →</span>
-                          {h.eventDate ? (
+                          {h.hit ? (
                             <>
                               <span className="text-up">{h.eventDate}</span>
                               <span className="text-muted">
-                                (
-                                {h.alreadyOn
-                                  ? "바닥 당시 이미 켜짐"
-                                  : `${leadText(h.leadDays)}, 남은 상승 ${num(h.captureSharePct, 0, "%")}`}
-                                )
+                                ({leadText(h.leadDays)}, 남은 상승 {num(h.captureSharePct, 0, "%")})
                               </span>
                             </>
+                          ) : h.alreadyOn ? (
+                            <span className="text-muted">
+                              적중 아님 — 창 안에 새 신호가 없고, 바닥 당시 이미 켜져 있던 상태
+                              {h.eventDate ? ` (${h.eventDate}에 켜짐)` : ""}
+                            </span>
                           ) : (
                             <span className="text-down">신호 없음</span>
                           )}
@@ -219,28 +232,26 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                     <p className="text-[11px] font-semibold">이게 우연일까?</p>
                     <p className="mt-1 text-[11px] leading-relaxed text-muted">
                       이 지표는 전체 기간에 <b className="text-white">{s.eventCount}번</b> 떴고, 그중{" "}
-                      <b className="text-white">{s.eventCount - s.falseAlarms}번</b>이 상승장 시작 부근이었습니다
-                      (정확도 {num(s.precision, 0, "%")}). 상승장 시작 부근은 전체 기간의{" "}
-                      {num(report.windowSharePct, 0, "%")}뿐이니, 아무 데나 {s.eventCount}번 찍는 가짜 지표가 이만큼
-                      맞을 확률은{" "}
-                      <b className={chanceText(s.chance).tone || "text-white"}>
-                        {s.chance == null
-                          ? "—"
-                          : s.chance < 0.001
-                            ? "0.1% 미만"
-                            : `${(s.chance * 100).toFixed(s.chance < 0.1 ? 1 : 0)}%`}
-                      </b>
-                      입니다.
-                      {s.chance != null && s.chance >= 0.05
-                        ? " 5%를 넘으므로 우연으로도 충분히 나올 수 있는 성적입니다."
-                        : s.chance != null
-                          ? " 사이클 표본 자체가 적다는 점은 감안하세요."
-                          : ""}
+                      <b className="text-white">{s.inWindowEvents.length}번</b>이 상승장 시작 부근이었습니다
+                      (정확도 {num(s.precision, 0, "%")} · 나머지 {s.falseAlarms}번은 헛신호). 상승장 시작 부근은
+                      전체 기간의 {num(report.windowSharePct, 0, "%")}뿐이니, 이 신호들을 간격째로 아무 시점으로나
+                      옮겨도 이만큼 맞을 확률은{" "}
+                      <b className={chanceTone(s.chance)}>{chancePct(s.chance)}</b>입니다.
+                      {s.chance != null && s.chance >= 0.2
+                        ? " 우연으로도 충분히 나오는 성적입니다."
+                        : s.chance != null && s.chance >= 0.05
+                          ? " 우연이라기엔 낮지만 확실하다고 하기엔 애매한 구간입니다."
+                          : s.chance != null
+                            ? " 사이클 표본 자체가 적다는 점은 감안하세요."
+                            : ""}
                     </p>
                     <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
                       과거 상승장 시작 {report.cycles.length}번 중{" "}
-                      <b className="text-white">{s.hitCount}번</b>을 잡았습니다 (적중률{" "}
+                      <b className="text-white">{s.hitCount}번</b>을 새로 켜지면서 잡았습니다 (적중률{" "}
                       {num(s.hitRate, 0, "%")}).
+                      {s.alreadyOnCount
+                        ? ` 그 밖에 ${s.alreadyOnCount}번은 창 안에 새 신호가 없었고 바닥 당시 이미 켜져 있기만 했습니다 — 적중으로 세지 않았습니다.`
+                        : ""}
                     </p>
                   </div>
 

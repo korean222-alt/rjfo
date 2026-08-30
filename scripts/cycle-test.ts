@@ -10,10 +10,12 @@ import { enrich } from "../lib/indicators";
 import { analyzeCycle, completedStarts, snapshotOnPct } from "../lib/cycle";
 import { findCycles, findPivots, STOCK_THRESHOLDS, CRYPTO_THRESHOLDS } from "../lib/cycle/regime";
 import {
+  circularShiftP,
   eventIndices,
   evaluateSignal,
   exclusiveCycleBounds,
   cycleWindowShare,
+  windowMask,
   DEFAULT_WINDOW,
   baselineStats,
 } from "../lib/cycle/evaluate";
@@ -215,8 +217,16 @@ console.log("\n[6] 전체 파이프라인");
     "적중 횟수는 사이클 수를 넘을 수 없다",
   );
   assert(
-    report.signals.every((s) => s.alreadyOnCount <= s.hitCount),
-    "이미켜짐 횟수는 적중을 넘을 수 없다",
+    report.signals.every((s) => s.hitCount + s.alreadyOnCount <= report.cycles.length),
+    "적중 + 이미켜짐은 사이클 수를 넘을 수 없다",
+  );
+  assert(
+    report.signals.every((s) => s.inWindowEvents.length + s.falseAlarms === s.eventCount),
+    "창 안 신호 + 오탐 = 전체 신호",
+  );
+  assert(
+    report.signals.every((s) => s.cycleHits.filter((h) => h.hit).length === s.hitCount),
+    "적중 횟수 = hit로 표시된 사이클 수",
   );
   assert(
     report.signals.every((s) => s.falseAlarms >= 0),
@@ -528,8 +538,9 @@ console.log("\n[11] 적중 판정 (이미 켜짐, 창 겹침 없음)");
     state: bars.map((_, i) => (i < 5 ? null : true)),
   };
   const always = evaluateSignal(bars, alwaysOn, cycles, baseline, share);
-  assert(always.hitCount === 2, `항상 켜짐은 바닥마다 적중 (실제 ${always.hitCount})`);
-  assert(always.alreadyOnCount === 2, `둘 다 이미 켜짐 (실제 ${always.alreadyOnCount})`);
+  assert(always.hitCount === 0, `항상 켜짐은 적중이 아니다 (실제 ${always.hitCount})`);
+  assert(always.alreadyOnCount === 2, `둘 다 '이미 켜짐'으로만 기록 (실제 ${always.alreadyOnCount})`);
+  assert(always.cycleHits.every((h) => !h.hit), "항상 켜짐은 어떤 사이클도 hit가 아니다");
   assert(always.eventCount === 0, `상승 엣지가 없으면 신호 0회 (실제 ${always.eventCount})`);
   assert(always.score < 50, `항상 켜짐은 순위에서 빠진다 (score ${always.score.toFixed(1)})`);
 
@@ -543,10 +554,25 @@ console.log("\n[11] 적중 판정 (이미 켜짐, 창 겹침 없음)");
     baseline,
     share,
   );
-  assert(early.hitCount >= 1, `창 직전 점등도 1번 사이클 적중 (실제 ${early.hitCount})`);
-  assert(early.cycleHits[0].alreadyOn === true, "1번 사이클은 이미 켜짐으로 적중");
-  assert(early.cycleHits[0].eventDate != null, "이미 켜짐이어도 점등일이 있다");
-  assert(early.falseAlarms === 0, "창 직전 점등은 오탐이 아니다");
+  assert(early.hitCount === 0, `창 밖 점등은 적중이 아니다 (실제 ${early.hitCount})`);
+  assert(early.cycleHits[0].alreadyOn === true, "1번 사이클은 '이미 켜짐'");
+  assert(early.cycleHits[0].hit === false, "'이미 켜짐'은 적중으로 세지 않는다");
+  assert(early.cycleHits[0].eventDate != null, "언제 켜졌는지는 남긴다");
+  assert(early.falseAlarms === 1, `창 밖 점등은 오탐 (실제 ${early.falseAlarms})`);
+
+  // 창 안(바닥 10일 전)에서 켜졌다가 바닥 전에 꺼짐 → 선행 적중이어야 한다.
+  const leadState: (boolean | null)[] = bars.map(() => false);
+  leadState[90] = true;
+  leadState[91] = true;
+  const leadEval = evaluateSignal(
+    bars,
+    { ...alwaysOn, key: "lead", label: "바닥 전 점등", state: leadState },
+    cycles,
+    baseline,
+    share,
+  );
+  assert(leadEval.cycleHits[0].hit === true, "바닥 20일 전 창 안 점등도 적중");
+  assert(leadEval.cycleHits[0].leadDays === -10, `리드 -10일 (실제 ${leadEval.cycleHits[0].leadDays})`);
 
   // 각 바닥 직후에만 짧게 점등. 창이 안 겹치니 신호가 서로 다른 사이클에 귀속.
   const timed: (boolean | null)[] = bars.map(() => false);
@@ -564,6 +590,81 @@ console.log("\n[11] 적중 판정 (이미 켜짐, 창 겹침 없음)");
   assert(timedEval.hitCount === 2, `바닥 직후 점등은 두 사이클 모두 적중 (실제 ${timedEval.hitCount})`);
   assert(timedEval.alreadyOnCount === 0, "바닥 당시에는 꺼져 있었고 직후 켜짐");
   assert(timedEval.falseAlarms === 0, `창 안 신호는 오탐 아님 (실제 ${timedEval.falseAlarms})`);
+
+  // 창 안에서 여러 번 떠도 전부 '맞은 신호'로 센다.
+  //
+  // 예전에는 사이클마다 하나만 세서, 창 안에서 세 번 떠도 두 번이 오탐이 됐다.
+  // 그래서 자주 뜨는 지표는 정확도가 구조적으로 깎이고 우연일 확률이 100%에 붙었다.
+  const many: (boolean | null)[] = bars.map(() => false);
+  for (const i of [110, 130, 150, 170]) {
+    many[i] = true;
+    many[i + 1] = true;
+  }
+  const manyEval = evaluateSignal(
+    bars,
+    { ...alwaysOn, key: "many", label: "창 안 다중 점등", state: many },
+    cycles,
+    baseline,
+    share,
+  );
+  assert(manyEval.eventCount === 4, `신호 4회 (실제 ${manyEval.eventCount})`);
+  assert(
+    manyEval.inWindowEvents.length === 4,
+    `창 안 신호 4회를 전부 센다 (실제 ${manyEval.inWindowEvents.length})`,
+  );
+  assert(manyEval.falseAlarms === 0, `창 안 다중 점등은 오탐 0 (실제 ${manyEval.falseAlarms})`);
+  assert(manyEval.precision === 100, `정확도 100% (실제 ${manyEval.precision})`);
+  assert(manyEval.hitCount === 1, `사이클 적중은 여전히 사이클 단위 (실제 ${manyEval.hitCount})`);
+
+  // 창을 다 피해 다니는 지표는 우연일 확률이 높아야 한다.
+  // 창은 [80,175]와 [230,399]. 그 사이 빈 구간에서만 뜨게 한다.
+  const outside: (boolean | null)[] = bars.map(() => false);
+  for (const i of [10, 30, 50, 190, 200, 210]) {
+    outside[i] = true;
+    outside[i + 1] = true;
+  }
+  const outsideEval = evaluateSignal(
+    bars,
+    { ...alwaysOn, key: "outside", label: "창 밖 점등", state: outside },
+    cycles,
+    baseline,
+    share,
+  );
+  assert(outsideEval.precision === 0, `창 밖만 뜨면 정확도 0% (실제 ${outsideEval.precision})`);
+  assert(
+    outsideEval.chance != null && outsideEval.chance > 0.5,
+    `창 밖 지표는 우연일 확률이 높다 (실제 ${outsideEval.chance})`,
+  );
+  assert(
+    manyEval.chance != null && manyEval.chance < outsideEval.chance!,
+    `창 안 지표가 더 우연 같지 않다 (${manyEval.chance} < ${outsideEval.chance})`,
+  );
+
+  // 순환 이동 검정. 창이 전체의 10%뿐인 마스크로 따로 본다
+  // (위 합성 사이클은 창이 전체의 67%라 무엇을 찍어도 잘 맞는다).
+  const mask = windowMask(
+    [
+      { lo: 100, hi: 150 },
+      { lo: 500, hi: 550 },
+    ],
+    1000,
+  );
+  const clustered = circularShiftP([100, 110, 120, 130], mask);
+  const spread = circularShiftP([0, 250, 500, 750], mask);
+  assert(
+    clustered != null && clustered < 0.1,
+    `창 안에만 네 번 뜨면 우연일 확률이 낮다 (실제 ${clustered})`,
+  );
+  assert(
+    spread != null && clustered != null && clustered < spread,
+    `흩어진 신호보다 우연 같지 않다 (${clustered} < ${spread})`,
+  );
+  assert(circularShiftP([], mask) === null, "신호가 없으면 확률을 못 잰다");
+  const one = circularShiftP([110], mask);
+  assert(
+    one != null && Math.abs(one - 102 / 1000) < 0.01,
+    `신호 1회짜리 확률은 창 비율(10.2%)에 수렴 (실제 ${one})`,
+  );
 }
 
 // ── 12. 실데이터 (인자로 티커를 주면) ─────────────────────────────

@@ -2,7 +2,8 @@
  * 지표 배터리 × 과거 상승장 시작점 = 성적표.
  *
  * 여기서 재는 것:
- *   적중률   — 과거 상승장 시작 N번 중 몇 번을 잡았나
+ *   적중률   — 과거 상승장 시작 N번 중, 그 부근에서 '새로 켜져서' 잡은 게 몇 번인가
+ *              (하락장 내내 켜진 채로 바닥을 지나온 건 적중이 아니다)
  *   리드타임 — 실제 바닥보다 며칠 빨랐나/늦었나 (음수 = 선행)
  *   남은 상승 — 신호가 떴을 때 그 사이클 상승분의 몇 %가 아직 남아 있었나
  *   정확도   — 전체 신호 중 상승장 시작 부근이었던 비율 (오탐의 반대)
@@ -55,17 +56,31 @@ export type CycleHit = {
   leadDays: number | null;
   /** 신호 시점에 그 사이클 상승분의 몇 %가 남아 있었나. */
   captureSharePct: number | null;
-  /** 창 안에서 새로 켜진 게 아니라, 바닥 당일 이미 켜져 있었다. */
+  /**
+   * 적중 여부. 창 안에서 '새로 켜진' 신호가 있어야 적중이다.
+   * 바닥 한참 전에 켜져서 그냥 켜진 채로 지나온 건 적중이 아니다.
+   */
+  hit: boolean;
+  /** 창 안에 새 신호는 없지만 바닥 당일 켜져는 있었다. 적중으로 세지 않는다. */
   alreadyOn: boolean;
 };
 
 export type SignalEvaluation = SignalDef & {
   events: string[];
   eventCount: number;
+  /** 그 신호들 중 상승장 시작 부근(사이클 창)에서 뜬 것의 날짜. 정확도의 분자. */
+  inWindowEvents: string[];
   cycleHits: CycleHit[];
+  /** 창 안에서 '새로 켜져서' 잡은 사이클 수. 이미 켜져 있던 건 안 센다. */
   hitCount: number;
   hitRate: number | null;
-  /** 바닥 당시 이미 켜져 있어서 적중한 횟수. 새로 뜬 신호가 아니다. */
+  /**
+   * 새 신호는 없었지만 바닥 당일 켜져는 있던 사이클 수.
+   *
+   * 적중에서 뺀 이유: 하락장 내내 켜진 채로 바닥을 지나온 지표도 '바닥에 켜져 있었다'가
+   * 되어 버린다. 그렇게 세면 늘 켜져 있는 지표가 전부 적중률 100%로 나와서
+   * 성적표 자체가 끼워 맞추기가 된다. 참고용으로 따로 보여준다.
+   */
   alreadyOnCount: number;
   medianLeadDays: number | null;
   medianCaptureSharePct: number | null;
@@ -86,9 +101,13 @@ export type SignalEvaluation = SignalDef & {
    * 동전 두 번 던져 앞면 두 번 나온 것과 다르지 않다. 표본 수를 같이 봐야 한다.
    *
    * 그래서 이렇게 묻는다: "아무 데나 eventCount번 찍는 가짜 지표가, 이 지표만큼
-   * (또는 그보다 더) 상승장 시작 부근을 맞힐 확률은?" 각 신호가 전체 기간에 고르게
-   * 떨어진다고 보면 상승장 시작 부근에 떨어질 확률이 windowShare이므로,
-   * 이항분포 B(eventCount, windowShare)의 꼬리 확률이 그 답이다.
+   * (또는 그보다 더) 상승장 시작 부근을 맞힐 확률은?" 두 가지로 재고 더 보수적인
+   * (높은) 쪽을 쓴다.
+   *
+   *   1) 이항 검정 — 신호가 서로 무관하게 아무 날에나 떨어진다고 볼 때. B(n, windowShare).
+   *   2) 순환 이동 검정 — 이 지표의 신호를 간격까지 그대로 둔 채 통째로 아무 시점으로
+   *      옮겨봤을 때. 실제 신호는 몰려서 뜨는데(MACD가 며칠 간격으로 두 번 등)
+   *      이항 검정은 그걸 독립으로 쳐서 확률을 실제보다 낮게 부른다.
    *
    * 0.05면 "우연히 이 정도가 나올 일이 20번에 한 번"이라는 뜻이다. 낮을수록 좋다.
    */
@@ -216,6 +235,49 @@ export function exclusiveCycleBounds(
   });
 }
 
+/** 사이클 창을 하루 단위 마스크로. 정확도·우연일 확률이 같은 기준을 보게 하는 근거. */
+export function windowMask(bounds: { lo: number; hi: number }[], barCount: number): Uint8Array {
+  const mask = new Uint8Array(barCount);
+  for (const b of bounds) {
+    for (let i = Math.max(0, b.lo); i <= Math.min(barCount - 1, b.hi); i++) mask[i] = 1;
+  }
+  return mask;
+}
+
+/**
+ * 순환 이동 검정.
+ *
+ * "이 지표의 신호를 (개수도 간격도 그대로 둔 채) 통째로 아무 시점으로 옮겨도
+ * 이만큼 상승장 시작 부근에 떨어질까?" 를 가능한 모든 이동에 대해 세어 본다.
+ *
+ * 이항 검정과 달리 신호가 몰려 뜨는 걸 그대로 안고 간다. MACD 골든크로스처럼
+ * 며칠 사이에 두 번 깜빡이는 지표는 실질 표본이 신호 횟수보다 적은데,
+ * 이항 검정은 그걸 독립 시행으로 세어 확률을 실제보다 낮게(좋아 보이게) 부른다.
+ *
+ * 관측값 자신(이동 0)도 후보에 넣는다. 그래야 p가 0으로 떨어지지 않는다.
+ */
+export function circularShiftP(events: number[], mask: Uint8Array): number | null {
+  const n = mask.length;
+  if (!events.length || n <= 0) return null;
+  let observed = 0;
+  for (const e of events) if (mask[e]) observed++;
+
+  // 이동 × 신호 = 계산량. 커지면 이동을 일정 간격으로 건너뛴다(결정론적).
+  const stride = Math.max(1, Math.ceil((n * events.length) / 2_000_000));
+  let tried = 0;
+  let atLeast = 0;
+  for (let s = 0; s < n; s += stride) {
+    let c = 0;
+    for (const e of events) {
+      const j = e + s;
+      if (mask[j >= n ? j - n : j]) c++;
+    }
+    tried++;
+    if (c >= observed) atLeast++;
+  }
+  return tried ? atLeast / tried : null;
+}
+
 function lastAtOrBefore(events: number[], idx: number): number | null {
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i] <= idx) return events[i];
@@ -248,60 +310,73 @@ export function evaluateSignal(
   const lastIdx = bars.length - 1;
   const bounds = exclusiveCycleBounds(cycles, bars.length, win);
 
-  const matchedEvents = new Set<number>();
+  const mask = windowMask(bounds, bars.length);
+
+  /**
+   * 상승장 시작 부근에서 뜬 신호는 '전부' 센다.
+   *
+   * 예전에는 사이클마다 대표 신호 하나만 맞은 걸로 쳤다. 그러면 맞힌 신호 수가
+   * 사이클 수(BTC면 11)를 절대 못 넘는데, 정확도의 분모인 신호 횟수는 수십~수백이다.
+   * 자주 뜨는 지표는 창 안에서 세 번 떠도 두 번이 오탐으로 기록됐다.
+   * 그 결과 정확도·우연대비는 실제보다 낮게, 우연일 확률은 실제보다 높게 나왔다
+   * (신호가 26번 넘어가면 어떤 지표든 우연일 확률이 100%에 붙어 버린다).
+   */
+  const inWindowIdx = events.filter((e) => mask[e] === 1);
+
   const cycleHits: CycleHit[] = cycles.map((cycle, i) => {
     const { lo, hi } = bounds[i];
-    const onAtTrough = signal.state[cycle.troughIdx] === true;
-    const miss = {
+    const span = cycle.nextPeakClose - cycle.troughClose;
+    const capture = (idx: number) =>
+      span > 0 ? Math.max(0, ((cycle.nextPeakClose - bars[idx].close) / span) * 100) : null;
+
+    // 1순위: 창 안에서 새로 켜진 첫 신호. 이게 진짜 '잡았다'이다.
+    const fresh = firstInRange(events, lo, hi);
+    if (fresh != null) {
+      return {
+        troughDate: cycle.troughDate,
+        eventDate: bars[fresh].date,
+        leadDays: fresh - cycle.troughIdx,
+        captureSharePct: capture(fresh),
+        hit: true,
+        alreadyOn: false,
+      };
+    }
+
+    // 새 신호는 없다. 바닥 당일 켜져는 있었나? 있었다면 참고로만 남긴다.
+    if (signal.state[cycle.troughIdx] === true) {
+      const prev = lastAtOrBefore(events, cycle.troughIdx);
+      return {
+        troughDate: cycle.troughDate,
+        eventDate: prev != null ? bars[prev].date : null,
+        leadDays: prev != null ? prev - cycle.troughIdx : null,
+        captureSharePct: null,
+        hit: false,
+        alreadyOn: true,
+      };
+    }
+
+    return {
       troughDate: cycle.troughDate,
       eventDate: null,
       leadDays: null,
       captureSharePct: null,
+      hit: false,
       alreadyOn: false,
-    };
-
-    let hitIdx: number | null = null;
-    let alreadyOn = false;
-    let priceIdx: number;
-
-    if (onAtTrough) {
-      const prev = lastAtOrBefore(events, cycle.troughIdx);
-      alreadyOn = prev == null || prev < lo;
-      hitIdx = prev != null ? prev : cycle.troughIdx;
-      priceIdx = cycle.troughIdx;
-      // 창 직전에서 켜져 바닥까지 유지되면 그 점등이 이 사이클의 신호다.
-      // 이미 앞 사이클에 묶인 점등(한 번 켜진 채 여러 바닥을 지난 경우)은 다시 세지 않는다.
-      if (prev != null && !matchedEvents.has(prev)) matchedEvents.add(prev);
-    } else {
-      const late = firstInRange(events, Math.max(lo, cycle.troughIdx), hi);
-      if (late == null) return miss;
-      hitIdx = late;
-      priceIdx = late;
-      matchedEvents.add(late);
-    }
-
-    const span = cycle.nextPeakClose - cycle.troughClose;
-    const remaining = cycle.nextPeakClose - bars[priceIdx].close;
-    return {
-      troughDate: cycle.troughDate,
-      eventDate: bars[hitIdx].date,
-      leadDays: hitIdx - cycle.troughIdx,
-      captureSharePct: span > 0 ? Math.max(0, (remaining / span) * 100) : null,
-      alreadyOn,
     };
   });
 
-  const hits = cycleHits.filter((h) => h.eventDate != null);
-  const alreadyOnCount = hits.filter((h) => h.alreadyOn).length;
-  const freshHits = hits.filter((h) => !h.alreadyOn);
+  const hits = cycleHits.filter((h) => h.hit);
+  const alreadyOnCount = cycleHits.filter((h) => h.alreadyOn).length;
   const hitRate = cycles.length ? (hits.length / cycles.length) * 100 : null;
-  const freshHitRate = cycles.length ? (freshHits.length / cycles.length) * 100 : 0;
-  const falseAlarms = events.length - matchedEvents.size;
-  const precision = events.length ? (matchedEvents.size / events.length) * 100 : null;
+  const falseAlarms = events.length - inWindowIdx.length;
+  const precision = events.length ? (inWindowIdx.length / events.length) * 100 : null;
   const lift = precision != null && windowShare > 0 ? precision / 100 / windowShare : null;
   const chance =
     events.length && windowShare > 0 && windowShare < 1
-      ? binomTailGe(matchedEvents.size, events.length, windowShare)
+      ? Math.max(
+          binomTailGe(inWindowIdx.length, events.length, windowShare),
+          circularShiftP(events, mask) ?? 0,
+        )
       : null;
 
   const forward: Record<string, ForwardStat> = {};
@@ -316,13 +391,18 @@ export function evaluateSignal(
   const lastEvent = events.length ? events[events.length - 1] : null;
 
   const captureMedian = median(
-    freshHits.map((h) => h.captureSharePct).filter((v): v is number => v != null),
+    hits.map((h) => h.captureSharePct).filter((v): v is number => v != null),
   );
 
-  // 순위는 '그 사이클에서 새로 켜졌는가'와 우연대비. 바닥 당시 이미 켜진 건
-  // 적중률에는 넣되 (사용자가 묻는 질문), 항상 켜진 지표가 1등이 되지 않게 점수에서는 뺀다.
+  // 순위 = 얼마나 잡았나(적중률) + 아무 날이나 찍은 것보다 나은가(우연대비) +
+  // 그게 우연이 아닌가(우연일 확률) + 잡았을 때 먹을 게 남아 있었나(남은 상승).
+  //
+  // 우연일 확률을 넣는 이유: 적중률과 우연대비만 보면 표본이 적어 운으로 좋아 보이는
+  // 지표가 위로 올라온다. 항상 켜져 있는 지표는 신호가 없어 셋 다 0점이 되어 저절로 밀린다.
   const liftScore = lift == null ? 0 : Math.min(1, lift / 3) * 100;
-  const score = freshHitRate * 0.4 + liftScore * 0.4 + (captureMedian ?? 0) * 0.2;
+  const chanceScore = chance == null ? 0 : (1 - chance) * 100;
+  const score =
+    (hitRate ?? 0) * 0.35 + liftScore * 0.25 + chanceScore * 0.25 + (captureMedian ?? 0) * 0.15;
 
   return {
     key: signal.key,
@@ -332,6 +412,7 @@ export function evaluateSignal(
     timeframe: signal.timeframe,
     events: events.map((i) => bars[i].date),
     eventCount: events.length,
+    inWindowEvents: inWindowIdx.map((i) => bars[i].date),
     cycleHits,
     hitCount: hits.length,
     hitRate,
@@ -369,10 +450,7 @@ export function cycleWindowShare(
   win: MatchWindow = DEFAULT_WINDOW,
 ): number {
   if (barCount <= 0 || !cycles.length) return 0;
-  const covered = new Uint8Array(barCount);
-  for (const b of exclusiveCycleBounds(cycles, barCount, win)) {
-    for (let i = b.lo; i <= b.hi; i++) covered[i] = 1;
-  }
+  const covered = windowMask(exclusiveCycleBounds(cycles, barCount, win), barCount);
   let n = 0;
   for (let i = 0; i < barCount; i++) n += covered[i];
   return n / barCount;

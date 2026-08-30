@@ -60,7 +60,7 @@ export function narrate(report: CycleReport): string {
     lines.push(
       `종합 1위는 "${best.label}"입니다. ${cycles.length}번 중 ${best.hitCount}번 적중` +
         (best.alreadyOnCount
-          ? ` (그중 ${best.alreadyOnCount}번은 바닥 당시 이미 켜져 있던 상태)`
+          ? ` (그 밖에 ${best.alreadyOnCount}번은 새 신호 없이 바닥 당시 켜져만 있어서 적중으로 안 셌습니다)`
           : "") +
         `, ${lead} 떴고, ` +
         `그 시점에 그 사이클 상승분의 ${pct(best.medianCaptureSharePct)}가 아직 남아 있었습니다.`,
@@ -70,6 +70,12 @@ export function narrate(report: CycleReport): string {
         best.lift >= 1
           ? `이 지표의 신호는 아무 날이나 찍었을 때보다 상승장 시작을 ${best.lift.toFixed(1)}배 자주 가리켰습니다.`
           : `다만 아무 날이나 찍는 것보다 나을 게 없습니다(우연대비 ${best.lift.toFixed(2)}배).`,
+      );
+    }
+    if (best.chance != null) {
+      lines.push(
+        `이 성적이 우연일 확률은 ${(best.chance * 100).toFixed(best.chance < 0.1 ? 1 : 0)}%입니다` +
+          (best.chance >= 0.2 ? " — 우연으로도 충분히 나오는 수준입니다." : "."),
       );
     }
     const base = report.baseline["250"].avg;
