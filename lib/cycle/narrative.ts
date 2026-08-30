@@ -6,6 +6,7 @@
  */
 
 import type { CycleReport } from "./index";
+import { completedStarts, snapshotOnPct } from "./index";
 
 function pct(n: number | null | undefined, digits = 0): string {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -74,9 +75,9 @@ export function narrate(report: CycleReport): string {
     );
   }
 
-  const completeStarts = report.cycleStarts.filter((c) => c.complete);
+  const completeStarts = completedStarts(report.cycleStarts, report.now.date);
   const avgAtStart = completeStarts.length
-    ? completeStarts.reduce((a, c) => a + c.onPct, 0) / completeStarts.length
+    ? completeStarts.reduce((a, c) => a + snapshotOnPct(c), 0) / completeStarts.length
     : null;
   const nowPct = report.now.total > 0 ? (report.now.on / report.now.total) * 100 : 0;
   lines.push(

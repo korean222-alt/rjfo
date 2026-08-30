@@ -7,7 +7,7 @@
  * 정확히 찍는지 본다. 라벨링이 틀리면 나머지 통계는 전부 무의미하다.
  */
 import { enrich } from "../lib/indicators";
-import { analyzeCycle } from "../lib/cycle";
+import { analyzeCycle, completedStarts, snapshotOnPct } from "../lib/cycle";
 import { findCycles, findPivots } from "../lib/cycle/regime";
 import { eventIndices } from "../lib/cycle/evaluate";
 import { toMonthly, toWeekly, projectToDaily, barsForView, snapDatesToView } from "../lib/cycle/resample";
@@ -214,6 +214,25 @@ console.log("\n[6] 전체 파이프라인");
   assert(report.now.on <= report.now.total, "켜진 지표 수 ≤ 전체 지표 수");
   assert(report.warnings.length > 0, "경고 문구가 항상 붙는다");
   assert(narrate(report).length > 50, "요약 문장 생성");
+  assert(report.cycleStarts.every((c) => typeof c.complete === "boolean"), "스냅샷에 complete");
+  assert(
+    report.cycleStarts.every((c) => Number.isFinite(c.onPct) && c.onPct === snapshotOnPct(c)),
+    "onPct = on/total",
+  );
+  assert(
+    completedStarts(report.cycleStarts, report.now.date).every((c) => c.complete),
+    "평균에는 완성 스냅샷만",
+  );
+  assert(!narrate(report).includes("NaN"), "요약에 NaN 없음");
+
+  // 구버전 캐시(complete/onPct 없음)는 오늘 측정된 마지막 항목만 빼고, 비율은 on/total로 복구.
+  const legacy = [
+    { troughDate: "2024-01-01", measuredDate: "2024-02-01", on: 21, total: 23 },
+    { troughDate: "2026-07-29", measuredDate: "2026-08-30", on: 2, total: 30 },
+  ] as unknown as Parameters<typeof completedStarts>[0];
+  const legacyDone = completedStarts(legacy, "2026-08-30");
+  assert(legacyDone.length === 1 && legacyDone[0].troughDate === "2024-01-01", "구캐시는 오늘 마지막만 제외");
+  assert(Math.round(snapshotOnPct(legacy[1])) === 7, `구캐시 onPct 복구 ${snapshotOnPct(legacy[1])}`);
 
   // 상승 추세로 끝나는 시계열이니 200일선 위는 켜져 있어야 한다.
   const ma200 = report.signals.find((s) => s.key === "ma200");

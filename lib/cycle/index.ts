@@ -72,6 +72,23 @@ export type CycleReport = {
   warnings: string[];
 };
 
+/** 구버전 캐시에는 onPct가 없어서 Math.round(undefined)가 NaN이 된다. */
+export function snapshotOnPct(c: { on: number; total: number; onPct?: number }): number {
+  if (typeof c.onPct === "number" && Number.isFinite(c.onPct)) return c.onPct;
+  return c.total > 0 ? (c.on / c.total) * 100 : 0;
+}
+
+/**
+ * 평균에 넣을 스냅샷.
+ * complete 필드가 없는 구캐시는 측정일이 오늘인 마지막 항목만 미완성으로 본다.
+ */
+export function completedStarts(starts: CycleStartSnapshot[], nowDate: string): CycleStartSnapshot[] {
+  if (!starts.length) return [];
+  const versioned = starts.every((c) => typeof c.complete === "boolean");
+  if (versioned) return starts.filter((c) => c.complete);
+  return starts.filter((c, i) => !(i === starts.length - 1 && c.measuredDate === nowDate));
+}
+
 export type AnalyzeCycleOptions = {
   thresholds?: Partial<CycleThresholds>;
   window?: Partial<MatchWindow>;

@@ -325,9 +325,10 @@ export function applySplitsIfNeeded(
 
   const out = bars.map((b) => ({ ...b }));
   const indexByDate = new Map(out.map((b, i) => [b.date, i]));
+  const ordered = [...splits].sort((a, b) => a.date - b.date);
 
-  for (const s of splits) {
-    const ratio = s.numerator / s.denominator; // 4:1 → 4
+  for (const s of ordered) {
+    const ratio = s.numerator / s.denominator; // 4:1 → 4, 1:10 병합 → 0.1
     if (!isFinite(ratio) || ratio <= 0 || ratio === 1) continue;
 
     const splitDate = toExchangeDate(s.date, timeZone);
@@ -339,8 +340,12 @@ export function applySplitsIfNeeded(
     if (!(before > 0 && after > 0)) continue;
 
     const observedJump = before / after;
-    // 미조정이면 점프가 ratio에 가깝다. 노이즈를 감안해 중간값(√ratio)을 임계로 쓴다.
-    const alreadyAdjusted = observedJump < Math.sqrt(ratio);
+    // 정분할(4:1): 미조정이면 종가가 급락 → before/after ≈ ratio(>1).
+    // 병합(1:10): 미조정이면 종가가 급등 → before/after ≈ ratio(<1).
+    // 이미 조정됐으면 점프 ≈ 1. √ratio를 경계로 두면 어느 쪽인지 갈린다.
+    const alreadyAdjusted = ratio > 1
+      ? observedJump < Math.sqrt(ratio)
+      : observedJump > Math.sqrt(ratio);
     if (alreadyAdjusted) continue;
 
     for (let i = 0; i < idx; i++) {
