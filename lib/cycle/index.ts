@@ -43,6 +43,10 @@ export type CycleStartSnapshot = {
   measuredDate: string;
   on: number;
   total: number;
+  /** 미완성이면 확인형 지표가 아직 안 켜져 평균을 구조적으로 끌어내린다. */
+  complete: boolean;
+  /** 워밍업 중인 지표는 분모에서 빠지므로 시점마다 total이 달라 개수로는 비교가 안 된다. */
+  onPct: number;
 };
 
 export type CycleReport = {
@@ -101,13 +105,18 @@ export function analyzeCycle(
   const nowCount = onCountAt(signals, lastIdx);
 
   const cycleStarts: CycleStartSnapshot[] = cycles.map((c) => {
-    const idx = Math.min(lastIdx, c.troughIdx + CYCLE_START_OFFSET);
+    const targetIdx = c.troughIdx + CYCLE_START_OFFSET;
+    // 데이터가 30거래일에 못 미치면 오늘로 잘리므로, 평균에서는 빼야 한다.
+    const complete = targetIdx <= lastIdx;
+    const idx = Math.min(lastIdx, targetIdx);
     const counted = onCountAt(signals, idx);
     return {
       troughDate: c.troughDate,
       measuredDate: bars[idx].date,
       on: counted.on,
       total: counted.total,
+      complete,
+      onPct: counted.total > 0 ? (counted.on / counted.total) * 100 : 0,
     };
   });
 
@@ -210,8 +219,10 @@ export function factsForLlm(report: CycleReport, topN = 6): string {
       이후상승: Math.round(c.gainPct),
     })),
     현재국면: report.regime.phase,
-    현재켜짐: `${report.now.on}/${report.now.total}`,
-    과거상승장시작시켜짐: report.cycleStarts.map((c) => `${c.troughDate}:${c.on}/${c.total}`),
+    현재켜짐: `${report.now.on}/${report.now.total}(${report.now.total ? Math.round((report.now.on / report.now.total) * 100) : 0}%)`,
+    과거상승장시작시켜짐: report.cycleStarts.map(
+      (c) => `${c.troughDate}:${c.on}/${c.total}(${Math.round(c.onPct)}%)${c.complete ? "" : "(진행중)"}`,
+    ),
     기저율1년: report.baseline["250"].avg == null ? null : Math.round(report.baseline["250"].avg),
     "상승장시작부근이_전체기간에서_차지하는비율": Math.round(report.windowSharePct),
     상위지표: top,

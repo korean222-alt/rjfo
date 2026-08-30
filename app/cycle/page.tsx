@@ -202,10 +202,14 @@ export default function CyclePage() {
     if (key) chartRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
+  const completeStarts = useMemo(
+    () => (report ? report.cycleStarts.filter((c) => c.complete) : []),
+    [report],
+  );
   const avgAtStart = useMemo(() => {
-    if (!report?.cycleStarts.length) return null;
-    return report.cycleStarts.reduce((a, c) => a + c.on, 0) / report.cycleStarts.length;
-  }, [report]);
+    if (!completeStarts.length) return null;
+    return completeStarts.reduce((a, c) => a + c.onPct, 0) / completeStarts.length;
+  }, [completeStarts]);
 
   const commonSignals = useMemo(
     () => (report ? report.signals.filter((s) => report.commonKeys.includes(s.key)) : []),
@@ -350,7 +354,13 @@ export default function CyclePage() {
             </div>
             <p className="mt-2 text-2xl font-black">
               {report.now.on}
-              <span className="text-base font-medium text-muted"> / {report.now.total}개 켜짐</span>
+              <span className="text-base font-medium text-muted">
+                {" "}
+                / {report.now.total}개 켜짐
+                {report.now.total
+                  ? ` (${Math.round((report.now.on / report.now.total) * 100)}%)`
+                  : ""}
+              </span>
             </p>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-bg">
               <div
@@ -362,14 +372,20 @@ export default function CyclePage() {
               현재 국면은 <b className="text-white">{report.regime.phase}</b>
               {report.regime.since ? ` (${report.regime.since}부터, ${signed(report.regime.fromPivotPct, 1)})` : ""}.
               {avgAtStart != null
-                ? ` 과거 상승장 시작 30거래일 뒤에는 평균 ${avgAtStart.toFixed(1)}개가 켜져 있었습니다.`
+                ? ` 과거 상승장 시작 30거래일 뒤에는 평균 ${Math.round(avgAtStart)}%가 켜져 있었습니다 (${completeStarts.length}번 기준).`
                 : ""}
             </p>
             {report.cycleStarts.length ? (
               <ul className="mt-2 flex flex-wrap gap-1.5">
                 {report.cycleStarts.map((c) => (
-                  <li key={c.troughDate} className="rounded border border-border bg-bg px-2 py-1 text-[11px] text-muted">
-                    {c.troughDate} → {c.on}/{c.total}
+                  <li
+                    key={c.troughDate}
+                    className={`rounded border border-border bg-bg px-2 py-1 text-[11px] text-muted${
+                      c.complete ? "" : " opacity-50"
+                    }`}
+                  >
+                    {c.troughDate} → {c.on}/{c.total} ({Math.round(c.onPct)}%)
+                    {c.complete ? "" : " (진행중)"}
                   </li>
                 ))}
               </ul>
@@ -548,7 +564,7 @@ export default function CyclePage() {
           {/* 공통 지표 */}
           <section className="rounded-2xl border border-up/30 bg-up/5 p-4">
             <h2 className="text-sm font-semibold">
-              {report.cycles.length}번을 모두 가리킨 지표
+              적중률 100% ({report.cycles.length}/{report.cycles.length})
             </h2>
             {commonSignals.length ? (
               <ul className="mt-2.5 space-y-1.5">
