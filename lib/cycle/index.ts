@@ -211,8 +211,10 @@ export function analyzeCycle(
     };
   });
 
+  // '전 사이클 적중'은 말 그대로 전부여야 한다. 두 번만 채점된 지표가 2/2로
+  // 여기 올라오면 이름이 거짓말이 된다.
   const commonKeys = evaluated
-    .filter((s) => cycles.length > 0 && s.hitRate === 100)
+    .filter((s) => cycles.length > 0 && s.hitRate === 100 && s.coverage.full)
     .map((s) => s.key);
 
   const years = bars.length ? tradingYears(bars[0].date, bars[lastIdx].date) : 0;
@@ -264,6 +266,17 @@ export function analyzeCycle(
         (position.medianFurtherDropToExitPct != null
           ? ` 이 지표들이 꺼질 때까지 기다리는 매도 규칙은 오늘 가격에서 중앙값 ${position.medianFurtherDropToExitPct.toFixed(0)}%를 더 반납합니다.`
           : ""),
+    );
+  }
+  // 값이 최근 구간에만 있는 지표(펀딩비 등)는 사이클 두어 번으로만 채점된다.
+  const partial = graded.filter(
+    (s) => !s.coverage.full && (s.grade === "A" || s.grade === "B"),
+  );
+  if (partial.length) {
+    warnings.push(
+      `${partial.map((s) => s.label).join(", ")}는 값이 있는 기간이 짧아 사이클 ${cycles.length}번 중 ` +
+        `${partial[0].coverage.cyclesCovered}번 안팎으로만 채점됐습니다. 적중률·우연대비의 분모를 그 구간으로 좁혀 ` +
+        `부풀려지지 않게는 했지만, 표본이 적다는 사실은 그대로입니다 — 전 기간을 본 지표와 같은 등급이어도 근거의 두께가 다릅니다.`,
     );
   }
   warnings.push(
@@ -337,7 +350,7 @@ export function factsForLlm(report: CycleReport, topN = 6): string {
     지표: s.label,
     등급: s.grade,
     통과관문: `${s.passCount}/6`,
-    적중: `${s.hitCount}/${report.cycles.length}`,
+    적중: `${s.hitCount}/${s.coverage.cyclesCovered}`,
     리드타임: s.medianLeadDays,
     선행후행: s.timing,
     남은상승: s.medianCaptureSharePct == null ? null : Math.round(s.medianCaptureSharePct),
@@ -350,11 +363,12 @@ export function factsForLlm(report: CycleReport, topN = 6): string {
     "신호후1년_최악낙폭": s.drawdown.worstPct == null ? null : Math.round(s.drawdown.worstPct),
     기저율대비: s.edge == null ? null : Math.round(s.edge),
     현재: s.currentlyOn ? "켜짐" : "꺼짐",
+    채점구간: s.coverage.full ? "전 기간" : `${s.coverage.fromDate}~ (${s.coverage.cyclesCovered}/${s.coverage.cyclesTotal}사이클)`,
   });
 
   const top = report.signals.slice(0, topN).map((s) => ({
     지표: s.label,
-    적중: `${s.hitCount}/${report.cycles.length}`,
+    적중: `${s.hitCount}/${s.coverage.cyclesCovered}`,
     리드타임: s.medianLeadDays,
     남은상승: s.medianCaptureSharePct == null ? null : Math.round(s.medianCaptureSharePct),
     정확도: s.precision == null ? null : Math.round(s.precision),

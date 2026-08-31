@@ -119,7 +119,54 @@ export type CycleHit = {
   hit: boolean;
   /** 창 안에 새 신호는 없지만 바닥 당일 켜져는 있었다. 적중으로 세지 않는다. */
   alreadyOn: boolean;
+  /**
+   * 이 사이클을 이 지표로 채점할 수 있었나 (= 바닥 당일 이 지표가 값을 가지고 있었나).
+   *
+   * 펀딩비처럼 최근 몇 년치만 있는 지표는 옛날 바닥을 볼 수가 없다. 그걸 '못 잡았다'로
+   * 세면 적중률이 데이터가 없다는 이유만으로 깎인다. 그래서 분모에서 아예 뺀다.
+   */
+  covered: boolean;
 };
+
+/**
+ * 이 지표가 실제로 값을 가진 구간.
+ *
+ * 왜 필요한가 (펀딩비를 넣으려다 발견한 문제):
+ *  펀딩비는 무료 소스로 몇 년치밖에 안 나온다. 20년 시세에 그걸 붙이면 지표의 상태가
+ *  앞 구간 내내 null이다. 그런데 채점기는 우연대비의 분모(창 비율)를 20년 전체로 재고,
+ *  순환 이동 검정도 신호를 20년 타임라인 위로 돌린다 — 그중 18년은 그 지표가 물리적으로
+ *  켜질 수 없는 구간이다. 분자는 최근 구간에서만 나오는데 분모는 전 기간이라
+ *  우연대비가 부풀려진다(합성 시세로 재보면 4.2배가 5.9배로 나온다).
+ *
+ *  반대로 적중률은 분모가 전체 사이클이라, 데이터가 없어서 못 본 옛날 바닥까지
+ *  '놓쳤다'로 세어 구조적으로 낮게 나온다.
+ *
+ *  그래서 이 지표를 채점할 때 쓰는 자를 전부 이 구간으로 좁힌다. 값이 전 구간에 있는
+ *  지표(대부분의 이동평균)에서는 워밍업 몇십 봉이 빠지는 정도라 결과가 거의 같다.
+ */
+export type Coverage = {
+  /** 값이 있는 첫 봉 / 마지막 봉. 값이 하나도 없으면 둘 다 -1. */
+  lo: number;
+  hi: number;
+  /** 그 안에서 실제로 값이 있는 봉 수 (중간 구멍 제외). */
+  bars: number;
+  fromDate: string | null;
+  toDate: string | null;
+  /** 전체 기간 대비 비율 (0~1). */
+  share: number;
+  /** 바닥이 이 구간 안에 들어와 채점할 수 있었던 사이클 수. */
+  cyclesCovered: number;
+  cyclesTotal: number;
+  /** 모든 사이클을 채점할 수 있었나. false면 부분 구간에서만 채점된 등급이다. */
+  full: boolean;
+};
+
+/** 값이 있는 봉을 1로 표시. null(워밍업·데이터 없음)은 0. */
+export function coverageMask(state: (boolean | null)[]): Uint8Array {
+  const m = new Uint8Array(state.length);
+  for (let i = 0; i < state.length; i++) m[i] = state[i] == null ? 0 : 1;
+  return m;
+}
 
 export type SignalEvaluation = SignalDef & {
   events: string[];
@@ -177,6 +224,8 @@ export type SignalEvaluation = SignalDef & {
   timing: "선행" | "동행" | "후행" | null;
   /** 기간을 반으로 갈라 본 성적. 사이클이 2개 미만이면 못 잰다. */
   walkForward: WalkForward | null;
+  /** 이 지표가 값을 가진 구간. 채점에 쓴 모든 분모가 이 구간으로 좁혀져 있다. */
+  coverage: Coverage;
   currentlyOn: boolean | null;
   lastEventDate: string | null;
   daysSinceLastEvent: number | null;
@@ -352,21 +401,28 @@ export function windowMask(bounds: { lo: number; hi: number }[], barCount: numbe
  *
  * 관측값 자신(이동 0)도 후보에 넣는다. 그래야 p가 0으로 떨어지지 않는다.
  */
-export function circularShiftP(events: number[], mask: Uint8Array): number | null {
-  const n = mask.length;
-  if (!events.length || n <= 0) return null;
+export function circularShiftP(
+  events: number[],
+  mask: Uint8Array,
+  /** 이동시킬 구간. 지표가 값을 가진 구간으로 좁혀 부른다. */
+  lo = 0,
+  hi = mask.length - 1,
+): number | null {
+  const n = hi - lo + 1;
+  const inRange = events.filter((e) => e >= lo && e <= hi);
+  if (!inRange.length || n <= 0) return null;
   let observed = 0;
-  for (const e of events) if (mask[e]) observed++;
+  for (const e of inRange) if (mask[e]) observed++;
 
   // 이동 × 신호 = 계산량. 커지면 이동을 일정 간격으로 건너뛴다(결정론적).
-  const stride = Math.max(1, Math.ceil((n * events.length) / 2_000_000));
+  const stride = Math.max(1, Math.ceil((n * inRange.length) / 2_000_000));
   let tried = 0;
   let atLeast = 0;
   for (let s = 0; s < n; s += stride) {
     let c = 0;
-    for (const e of events) {
-      const j = e + s;
-      if (mask[j >= n ? j - n : j]) c++;
+    for (const e of inRange) {
+      const j = e - lo + s;
+      if (mask[lo + (j >= n ? j - n : j)]) c++;
     }
     tried++;
     if (c >= observed) atLeast++;
@@ -396,13 +452,22 @@ function halfStat(
   cycleHits: CycleHit[],
   events: number[],
   mask: Uint8Array,
+  /** 지표가 값을 가진 봉. 창 비율의 분모를 여기로 좁힌다. */
+  cov: Uint8Array,
 ): HalfStat {
   let covered = 0;
-  for (let i = lo; i <= hi; i++) covered += mask[i];
-  const span = hi - lo + 1;
+  let span = 0;
+  for (let i = lo; i <= hi; i++) {
+    if (!cov[i]) continue;
+    span++;
+    covered += mask[i];
+  }
   const share = span > 0 ? covered / span : 0;
 
-  const inHalf = cycles.map((c) => c.troughIdx >= lo && c.troughIdx <= hi);
+  // 값이 없어 채점할 수 없었던 사이클은 이 반쪽에서도 분모에서 뺀다.
+  const inHalf = cycles.map(
+    (c, i) => c.troughIdx >= lo && c.troughIdx <= hi && cycleHits[i].covered,
+  );
   const ev = events.filter((e) => e >= lo && e <= hi);
   const inWindow = ev.filter((e) => mask[e] === 1).length;
   const precision = ev.length ? inWindow / ev.length : null;
@@ -429,13 +494,18 @@ export function walkForwardStats(
   cycleHits: CycleHit[],
   events: number[],
   mask: Uint8Array,
+  cov: Uint8Array,
+  /** 지표가 값을 가진 구간. 그 밖에서는 자를 수도, 채점할 수도 없다. */
+  range: { lo: number; hi: number } = { lo: 0, hi: bars.length - 1 },
 ): WalkForward | null {
-  if (cycles.length < 2 || bars.length < 4) return null;
-  const splitIdx = cycles[Math.floor(cycles.length / 2)].troughIdx;
-  if (splitIdx <= 0 || splitIdx >= bars.length - 1) return null;
+  // 채점할 수 있는 사이클(값이 있는 구간 안의 바닥)로만 나눈다.
+  const gradable = cycles.filter((_, i) => cycleHits[i].covered);
+  if (gradable.length < 2 || bars.length < 4) return null;
+  const splitIdx = gradable[Math.floor(gradable.length / 2)].troughIdx;
+  if (splitIdx <= range.lo || splitIdx >= range.hi) return null;
 
-  const early = halfStat(bars, 0, splitIdx - 1, cycles, cycleHits, events, mask);
-  const late = halfStat(bars, splitIdx, bars.length - 1, cycles, cycleHits, events, mask);
+  const early = halfStat(bars, range.lo, splitIdx - 1, cycles, cycleHits, events, mask, cov);
+  const late = halfStat(bars, splitIdx, range.hi, cycles, cycleHits, events, mask, cov);
   const heldUp =
     early.cycles > 0 &&
     late.cycles > 0 &&
@@ -482,6 +552,24 @@ export function evaluateSignal(
 
   const mask = windowMask(bounds, bars.length);
 
+  // 이 지표가 값을 가진 구간. 아래의 모든 분모를 여기로 좁힌다 (Coverage 주석 참고).
+  const cov = coverageMask(signal.state);
+  let covLo = -1;
+  let covHi = -1;
+  let covBars = 0;
+  for (let i = 0; i < cov.length; i++) {
+    if (!cov[i]) continue;
+    if (covLo < 0) covLo = i;
+    covHi = i;
+    covBars++;
+  }
+  const hasCov = covLo >= 0;
+
+  // 창 비율: 값이 있는 봉 중 '상승장 시작 부근'이 차지하는 비율.
+  let covInWindow = 0;
+  for (let i = 0; i < cov.length; i++) if (cov[i] && mask[i]) covInWindow++;
+  const localWindowShare = covBars > 0 ? covInWindow / covBars : windowShare;
+
   /**
    * 상승장 시작 부근에서 뜬 신호는 '전부' 센다.
    *
@@ -500,6 +588,9 @@ export function evaluateSignal(
       span > 0 ? Math.max(0, ((cycle.nextPeakClose - bars[idx].close) / span) * 100) : null;
 
     // 1순위: 창 안에서 새로 켜진 첫 신호. 이게 진짜 '잡았다'이다.
+    // 바닥 당일 이 지표에 값이 있었나. 없었으면 애초에 채점 대상이 아니다.
+    const covered = cov[cycle.troughIdx] === 1;
+
     const fresh = firstInRange(events, lo, hi);
     if (fresh != null) {
       return {
@@ -507,8 +598,9 @@ export function evaluateSignal(
         eventDate: bars[fresh].date,
         leadDays: fresh - cycle.troughIdx,
         captureSharePct: capture(fresh),
-        hit: true,
+        hit: covered,
         alreadyOn: false,
+        covered,
       };
     }
 
@@ -522,6 +614,7 @@ export function evaluateSignal(
         captureSharePct: null,
         hit: false,
         alreadyOn: true,
+        covered,
       };
     }
 
@@ -532,22 +625,37 @@ export function evaluateSignal(
       captureSharePct: null,
       hit: false,
       alreadyOn: false,
+      covered,
     };
   });
 
   const hits = cycleHits.filter((h) => h.hit);
-  const alreadyOnCount = cycleHits.filter((h) => h.alreadyOn).length;
-  const hitRate = cycles.length ? (hits.length / cycles.length) * 100 : null;
+  const alreadyOnCount = cycleHits.filter((h) => h.alreadyOn && h.covered).length;
+  // 분모는 '채점할 수 있었던 사이클'. 데이터가 없어 못 본 옛날 바닥은 놓친 게 아니다.
+  const gradableCycles = cycleHits.filter((h) => h.covered).length;
+  const hitRate = gradableCycles ? (hits.length / gradableCycles) * 100 : null;
   const falseAlarms = events.length - inWindowIdx.length;
   const precision = events.length ? (inWindowIdx.length / events.length) * 100 : null;
-  const lift = precision != null && windowShare > 0 ? precision / 100 / windowShare : null;
+  const lift = precision != null && localWindowShare > 0 ? precision / 100 / localWindowShare : null;
   const chance =
-    events.length && windowShare > 0 && windowShare < 1
+    events.length && localWindowShare > 0 && localWindowShare < 1
       ? Math.max(
-          binomTailGe(inWindowIdx.length, events.length, windowShare),
-          circularShiftP(events, mask) ?? 0,
+          binomTailGe(inWindowIdx.length, events.length, localWindowShare),
+          (hasCov ? circularShiftP(events, mask, covLo, covHi) : circularShiftP(events, mask)) ?? 0,
         )
       : null;
+
+  const coverage: Coverage = {
+    lo: covLo,
+    hi: covHi,
+    bars: covBars,
+    fromDate: hasCov ? bars[covLo].date : null,
+    toDate: hasCov ? bars[covHi].date : null,
+    share: bars.length ? covBars / bars.length : 0,
+    cyclesCovered: gradableCycles,
+    cyclesTotal: cycles.length,
+    full: gradableCycles === cycles.length,
+  };
 
   const forward: Record<string, ForwardStat> = {};
   for (const h of HORIZONS) forward[String(h)] = statsAt(bars, events, h);
@@ -567,7 +675,10 @@ export function evaluateSignal(
   const medianLeadDays = median(
     hits.map((h) => h.leadDays).filter((v): v is number => v != null),
   );
-  const walkForward = walkForwardStats(bars, cycles, cycleHits, events, mask);
+  const walkForward = walkForwardStats(bars, cycles, cycleHits, events, mask, cov, {
+    lo: hasCov ? covLo : 0,
+    hi: hasCov ? covHi : lastIdx,
+  });
 
   // 순위 = 얼마나 잡았나(적중률) + 아무 날이나 찍은 것보다 나은가(우연대비) +
   // 그게 우연이 아닌가(우연일 확률) + 잡았을 때 먹을 게 남아 있었나(남은 상승).
@@ -603,6 +714,7 @@ export function evaluateSignal(
     edge,
     timing: timingOf(medianLeadDays),
     walkForward,
+    coverage,
     currentlyOn,
     lastEventDate: lastEvent != null ? bars[lastEvent].date : null,
     daysSinceLastEvent: lastEvent != null ? lastIdx - lastEvent : null,

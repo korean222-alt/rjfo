@@ -446,6 +446,48 @@ function build(key: string, ctx: Ctx): SignalPlot {
         rule: "최근 60일 고점과 저점이 그 이전 60일보다 둘 다 높으면 켜짐",
       };
 
+    case "fund_neg": {
+      const f7 = bars.map((b, i) => {
+        if (i < 6) return null;
+        let sum = 0;
+        for (let k = i - 6; k <= i; k++) {
+          const v = bars[k].funding_pct;
+          if (v == null || !Number.isFinite(v)) return null;
+          sum += v;
+        }
+        return sum / 7;
+      });
+      return {
+        overlays: [],
+        pane: {
+          title: "펀딩비 7일 평균 (%)",
+          lines: [
+            dated(bars, bars.map((b) => b.funding_pct), "일별", C.grey, { width: 1 }),
+            dated(bars, f7, "7일 평균", C.sky, { width: 2 }),
+          ],
+          levels: [{ value: 0, label: "0" }],
+        },
+        rule: "펀딩비 7일 평균이 0 아래면 켜짐 (숏이 롱에게 수수료를 내는 상태)",
+      };
+    }
+    case "fund_washed":
+    case "fund_reset":
+      return {
+        overlays: [],
+        pane: {
+          title: "펀딩비 60일 z-점수",
+          lines: [dated(bars, bars.map((b) => b.funding_zscore_60d), "z-점수", C.sky, { width: 2 })],
+          levels: [
+            { value: 0, label: "0" },
+            { value: -1, label: "-1" },
+          ],
+        },
+        rule:
+          key === "fund_washed"
+            ? "펀딩비가 최근 60일 평균보다 1표준편차 아래면 켜짐"
+            : "60일 안에 z ≤ -1을 찍은 뒤 z가 0 위로 올라오면 켜짐",
+      };
+
     default:
       return { ...none, rule: "" };
   }
@@ -484,8 +526,11 @@ const VIEW_ALIAS: Record<string, string> = {
  * 선택한 봉 기준의 그림. 성적표 채점은 일봉 그대로 두고, 차트만 이 봉으로 본다.
  * 주봉/월봉에서는 같은 공식을 그 봉에 그대로 돌린다 (TradingView에서 봉을 바꿨을 때와 같음).
  */
+/** 펀딩비는 8시간 정산값을 일 단위로 묶은 것이라 주봉·월봉으로 다시 묶지 않는다. */
+const DAILY_ONLY = new Set(["fund_neg", "fund_washed", "fund_reset"]);
+
 export function plotForView(key: string, dailyBars: EnrichedBar[], tf: ChartTf): SignalPlot {
-  if (tf === "1d") return plotForSignal(key, dailyBars);
+  if (tf === "1d" || DAILY_ONLY.has(key)) return plotForSignal(key, dailyBars);
   const members = comboMembers(key);
   if (members) {
     return mergePlots(
