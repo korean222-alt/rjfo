@@ -10,6 +10,8 @@ type Msg = {
   text: string;
   /** 상승장 분석 답변이면 그 탭으로 가는 링크를 같이 보여준다. */
   cycleTicker?: string;
+  /** 캔들 분석 답변이면 캔들 탭으로 가는 링크를 같이 보여준다. */
+  candleTicker?: string;
 };
 
 type Props = {
@@ -71,10 +73,11 @@ export default function AssistantChat({ ticker, onApplied, onClearMarkers, onOve
           role: "assistant",
           text: data.reply!,
           ...(data.action === "cycle" ? { cycleTicker: data.ticker } : {}),
+          ...(data.action === "candle" ? { candleTicker: data.ticker } : {}),
         },
       ]);
 
-      if (data.action === "cycle") return;
+      if (data.action === "cycle" || data.action === "candle") return;
 
       if (data.action === "clear") {
         onClearMarkers?.();
@@ -125,6 +128,14 @@ export default function AssistantChat({ ticker, onApplied, onClearMarkers, onOve
                 className="mt-2 inline-block rounded-lg border border-blue-500/50 bg-blue-500/10 px-2.5 py-1.5 text-[11px] font-medium text-blue-300"
               >
                 🔺 상승장 지표 탭에서 지표별로 보기
+              </Link>
+            ) : null}
+            {m.candleTicker ? (
+              <Link
+                href={`/candle?ticker=${encodeURIComponent(m.candleTicker)}`}
+                className="mt-2 inline-block rounded-lg border border-blue-500/50 bg-blue-500/10 px-2.5 py-1.5 text-[11px] font-medium text-blue-300"
+              >
+                🕯️ 캔들 탭에서 패턴별로 보기
               </Link>
             ) : null}
           </div>

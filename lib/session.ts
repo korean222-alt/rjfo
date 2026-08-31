@@ -165,3 +165,33 @@ export function clearCycle(): void {
     // ignore
   }
 }
+
+// ── 캔들 분석 탭 ────────────────────────────────────────────────────
+// 사이클과 같은 이유로 들고 있는다. 키에 버전을 붙이는 이유도 같다 —
+// 채점 규칙(관문, 채점 구간 등)이 바뀌면 예전 리포트는 새 화면이 기대하는 필드가 없다.
+const CANDLE_KEY = "volume-analyzer:candle:v1";
+
+export function saveCandle(payload: unknown): void {
+  try {
+    sessionStorage.setItem(CANDLE_KEY, JSON.stringify(payload));
+  } catch {
+    // 용량 초과 등은 무시 — 없으면 다시 분석할 뿐이다.
+  }
+}
+
+export function loadCandle<T>(): T | null {
+  try {
+    const raw = sessionStorage.getItem(CANDLE_KEY);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearCandle(): void {
+  try {
+    sessionStorage.removeItem(CANDLE_KEY);
+  } catch {
+    // ignore
+  }
+}

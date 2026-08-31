@@ -7,6 +7,8 @@ import { generateText, GeminiError } from "@/lib/gemini";
 import { enrich } from "@/lib/indicators";
 import { analyzeCycle, factsForLlm } from "@/lib/cycle";
 import { narrate } from "@/lib/cycle/narrative";
+import { analyzeCandles, factsForLlm as candleFacts } from "@/lib/candle";
+import { narrate as narrateCandles } from "@/lib/candle/narrative";
 import { scanMaBreakout, scanSurgePrelude, type ChartMarker } from "@/lib/scan";
 import { analyzeAtDates } from "@/lib/stats";
 import type { AnalysisResult, EnrichedBar, FilterSpec } from "@/types";
@@ -125,7 +127,10 @@ export async function POST(req: Request) {
   }
 
   const intentTicker =
-    intent.kind === "surge_prelude" || intent.kind === "ma_breakout" || intent.kind === "cycle"
+    intent.kind === "surge_prelude" ||
+    intent.kind === "ma_breakout" ||
+    intent.kind === "cycle" ||
+    intent.kind === "candle"
       ? intent.ticker
       : undefined;
   const rawTicker = intentTicker || (typeof body.ticker === "string" ? body.ticker : "");
@@ -146,6 +151,26 @@ export async function POST(req: Request) {
       const report = analyzeCycle(ticker, enrich(raw));
       const reply = (await polish(factsForLlm(report), message)) ?? narrate(report);
       return json({ reply, ticker, action: "cycle", markers: [] as ChartMarker[] });
+    } catch (e) {
+      if (e instanceof DataProviderError) return json({ error: e.message }, { status: e.status });
+      return json({ error: `시세를 가져오지 못했습니다: ${(e as Error).message}` }, { status: 502 });
+    }
+  }
+
+  if (intent.kind === "candle") {
+    // 캔들 패턴도 표본을 모으려면 길게 받아야 한다. 잘 안 나오는 모양(샛별형 등)은
+    // 5년치로는 열 번도 안 뜬다.
+    try {
+      const raw = await loadBars(ticker, { years: MAX_YEARS });
+      if (raw.length < 400) {
+        return json(
+          { error: `'${ticker}' 일봉이 ${raw.length}개뿐이라 캔들 패턴을 채점할 수 없습니다.` },
+          { status: 422 },
+        );
+      }
+      const report = analyzeCandles(ticker, enrich(raw));
+      const reply = (await polish(candleFacts(report), message)) ?? narrateCandles(report);
+      return json({ reply, ticker, action: "candle", markers: [] as ChartMarker[] });
     } catch (e) {
       if (e instanceof DataProviderError) return json({ error: e.message }, { status: e.status });
       return json({ error: `시세를 가져오지 못했습니다: ${(e as Error).message}` }, { status: 502 });

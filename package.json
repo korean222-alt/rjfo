@@ -13,7 +13,8 @@
     "test:gemini": "tsx scripts/gemini-test.ts",
     "test:data": "tsx scripts/data-test.ts",
     "test:scan": "tsx scripts/scan-test.ts",
-    "test:cycle": "tsx scripts/cycle-test.ts"
+    "test:cycle": "tsx scripts/cycle-test.ts",
+    "test:candle": "tsx scripts/candle-test.ts"
   },
   "dependencies": {
     "next": "14.2.35",

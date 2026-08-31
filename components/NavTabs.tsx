@@ -4,12 +4,15 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 /**
- * 화면이 셋으로 늘어나면서(거래량 / 상승장 / 알림) 어디에 있는지 헷갈리기 쉬워졌다.
+ * 화면이 넷으로 늘어나면서(거래량 / 상승장 / 캔들 / 알림) 어디에 있는지 헷갈리기 쉬워졌다.
  * 상단에 항상 같은 자리에 탭을 둔다.
+ *
+ * 넷부터는 폰 가로폭에 라벨이 안 들어간다. 아이콘은 그대로 두고 글자만 줄인다.
  */
 const TABS = [
-  { href: "/", label: "거래량 분석", icon: "📊" },
-  { href: "/cycle", label: "상승장 지표", icon: "🔺" },
+  { href: "/", label: "거래량", icon: "📊" },
+  { href: "/cycle", label: "상승장", icon: "🔺" },
+  { href: "/candle", label: "캔들", icon: "🕯️" },
   { href: "/alerts", label: "알림", icon: "🔔" },
 ];
 

@@ -17,6 +17,7 @@ export type AssistantIntent =
       direction: "up" | "down";
     }
   | { kind: "cycle"; ticker?: string }
+  | { kind: "candle"; ticker?: string }
   | { kind: "draw_ma"; ticker?: string; period: number }
   | { kind: "mark" }
   | { kind: "clear" }
@@ -81,6 +82,17 @@ export function parseAssistantIntent(message: string): AssistantIntent {
   // "365일선 돌파하면 상승장이 왔었어?"는 돌파 스캔이 아니라 사이클 분석이 답이다.
   if (/상승장|불장|강세장|대세\s*상승|사이클|하락장\s*(끝|종료|마무리)|바닥\s*(확인|잡)|추세\s*전환/.test(s)) {
     return { kind: "cycle", ticker };
+  }
+
+  // 캔들 모양 질문. 패턴 이름이 나오면 그것만으로 충분하고, 아니면 '캔들/봉'과
+  // 모양을 묻는 말이 같이 나와야 한다 ("거래량이 봉을 넘었어" 같은 문장을 안 잡게).
+  if (
+    /망치형|해머|장악형|엥걸핑|샛별|석별|적삼병|흑삼병|잉태|하라미|도지|유성형|교수형|흑운|관통형|집게|장대\s*[양음]봉|아랫?꼬리|윗꼬리/.test(
+      s,
+    ) ||
+    (/캔들|봉\s*모양|양봉|음봉/.test(s) && /패턴|모양|나오면|뜨면|어때|분석|의미/.test(s))
+  ) {
+    return { kind: "candle", ticker };
   }
 
   const surge = s.match(/(\d+)\s*일(?:만)?에\s*(\d+(?:\.\d+)?)\s*%\s*이상\s*(?:급등|상승)/);
