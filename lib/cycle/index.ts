@@ -24,8 +24,9 @@ import {
   type MatchWindow,
   type SignalEvaluation,
 } from "./evaluate";
-import { buildCombos, type ComboEvaluation } from "./combos";
+import { andState, buildCombos, type ComboEvaluation } from "./combos";
 import { gradeSignals, type GradedSignal } from "./grade";
+import { assessPosition, type PositionAssessment, type PositionInput } from "./position";
 import {
   currentRegime,
   findCycles,
@@ -38,6 +39,7 @@ import { buildSignals, type SignalSeries } from "./signals";
 export * from "./combos";
 export * from "./evaluate";
 export * from "./grade";
+export * from "./position";
 export * from "./regime";
 export * from "./signals";
 
@@ -90,6 +92,14 @@ export type CycleReport = {
    */
   commonKeys: string[];
   now: { date: string; on: number; total: number };
+  /**
+   * 지금이 사이클의 어디쯤인지, 켜진 지표가 켜진 지 얼마나 됐는지, 그 지표가 꺼질 때까지
+   * 기다리면 얼마를 반납하게 되는지.
+   *
+   * 등급표만으로는 "이미 많이 올라서 A등급이 다 켜진 상태"와 "지금 막 켜진 상태"가
+   * 구별되지 않는다. 등급의 근거가 되는 숫자는 전부 '켜지는 날' 기준이기 때문이다.
+   */
+  position: PositionAssessment;
   cycleStarts: CycleStartSnapshot[];
   reliability: "매우 낮음" | "낮음" | "보통";
   warnings: string[];
@@ -167,6 +177,24 @@ export function analyzeCycle(
   const lastIdx = bars.length - 1;
   const nowCount = onCountAt(signals, lastIdx);
 
+  // '지금 위치'는 등급이 매겨진 것들만 본다. 조합은 구성 지표에서 상태를 되만든다
+  // (buildCombos는 채점 결과만 돌려주고 상태 배열은 안 남긴다).
+  const stateByKey = new Map(signals.map((s) => [s.key, s.state]));
+  const positionInputs: PositionInput[] = [
+    ...evaluated.flatMap((g) => {
+      const state = stateByKey.get(g.key);
+      return state ? [{ key: g.key, label: g.label, grade: g.grade, score: g.score, state }] : [];
+    }),
+    ...combos.flatMap((g) => {
+      const a = stateByKey.get(g.members[0]);
+      const b = stateByKey.get(g.members[1]);
+      return a && b
+        ? [{ key: g.key, label: g.label, grade: g.grade, score: g.score, state: andState(a, b) }]
+        : [];
+    }),
+  ];
+  const position = assessPosition(bars, cycles, positionInputs, thresholds, window.after);
+
   const cycleStarts: CycleStartSnapshot[] = cycles.map((c) => {
     const targetIdx = c.troughIdx + CYCLE_START_OFFSET;
     // 데이터가 30거래일에 못 미치면 오늘로 잘리므로, 평균에서는 빼야 한다.
@@ -225,6 +253,22 @@ export function analyzeCycle(
       ? `여섯 관문을 다 통과한 신호가 ${buyable}개입니다. 그래도 과거 표본이 사이클 ${cycles.length}번뿐이라는 사실은 변하지 않습니다.`
       : "여섯 관문을 다 통과한 신호는 없습니다. 지금 이 종목에서 '이거 뜨면 사도 된다'고 말할 근거는 데이터에 없습니다.",
   );
+  // 이 앱의 가장 큰 오독을 막는 경고. 등급은 '켜지는 날'에 매겨졌는데 화면은 '켜져 있음'을 보여준다.
+  const onGraded = position.onSignals.filter((s) => s.grade === "A" || s.grade === "B");
+  if (onGraded.length) {
+    const stale = onGraded.filter((s) => !s.fresh).length;
+    warnings.push(
+      `지금 켜져 있는 A·B등급이 ${onGraded.length}개이고 그중 ${stale}개는 등급을 잰 창(바닥 뒤 ${window.after}거래일)을 이미 벗어났습니다. ` +
+        `등급표의 숫자는 전부 '그 지표가 켜지는 날' 기준이라 오래전에 켜진 지표에는 적용되지 않습니다 — ` +
+        `'A등급이 켜져 있다'는 '지금 사도 된다'가 아닙니다. 지금 진입을 판단하려면 '지금 위치'의 진행도와 반납폭을 보세요.` +
+        (position.medianFurtherDropToExitPct != null
+          ? ` 이 지표들이 꺼질 때까지 기다리는 매도 규칙은 오늘 가격에서 중앙값 ${position.medianFurtherDropToExitPct.toFixed(0)}%를 더 반납합니다.`
+          : ""),
+    );
+  }
+  warnings.push(
+    "이 배터리에는 하락 지표가 없습니다. 여기 지표는 전부 상승 전환을 확인하는 용도로만 채점됐고, 매도 시점으로는 채점된 적이 없습니다. 꺼짐을 매도 신호로 쓰면 안 됩니다.",
+  );
   if (cycles.length) {
     warnings.push(
       `전체 기간의 ${(windowShare * 100).toFixed(0)}%가 '상승장 시작 부근'입니다. 자주 켜지는 지표는 그것만으로도 적중률이 높게 나오므로, 적중률보다 '우연대비' 배수를 보세요. ` +
@@ -270,6 +314,7 @@ export function analyzeCycle(
     combos,
     commonKeys,
     now: { date: bars[lastIdx]?.date ?? "", on: nowCount.on, total: nowCount.total },
+    position,
     cycleStarts,
     reliability,
     warnings,
@@ -282,6 +327,9 @@ function tradingYears(start: string, end: string): number {
   if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return 0;
   return (b - a) / (365.25 * 86400000);
 }
+
+const round = (v: number | null | undefined): number | null =>
+  v == null || !Number.isFinite(v) ? null : Math.round(v);
 
 /** LLM에 넘길 사실 요약. 여기 없는 숫자는 모델이 만들어낼 수 없다. */
 export function factsForLlm(report: CycleReport, topN = 6): string {
@@ -349,6 +397,31 @@ export function factsForLlm(report: CycleReport, topN = 6): string {
     지금켜진A등급: report.signals
       .filter((s) => s.grade === "A" && s.currentlyOn)
       .map((s) => s.label),
+    지금위치: {
+      단계: report.position.stage,
+      바닥: report.position.cycle.troughDate,
+      진행중: report.position.cycle.ongoing,
+      바닥대비상승: round(report.position.cycle.gainPct),
+      과거상승폭중앙값: round(report.position.cycle.medianPastGainPct),
+      진행도퍼센트: round(report.position.cycle.progressPct),
+      이미넘어선과거사이클수: `${report.position.cycle.exceededCount}/${report.position.cycle.pastGains.length}`,
+      이번사이클고점: report.position.cycle.peakDate,
+      고점대비현재: round(report.position.cycle.fromPeakPct),
+      하락국면까지추가하락: round(report.position.cycle.furtherDropToBearPct),
+      "켜진상위등급_창안": report.position.freshCount,
+      "켜진상위등급_창밖": report.position.staleCount,
+      지표꺼질때까지추가하락중앙값: round(report.position.medianFurtherDropToExitPct),
+      켜진지표: report.position.onSignals.slice(0, 8).map((s) => ({
+        지표: s.label,
+        등급: s.grade,
+        켜진날: s.onSinceDate,
+        켜진지: s.daysOn,
+        등급창안: s.fresh,
+        고점대비지금: round(s.givebackNowPct),
+        과거꺼진지점: round(s.medianExitGivebackPct),
+        꺼질때까지추가하락: round(s.furtherDropToExitPct),
+      })),
+    },
   });
 }
 

@@ -6,6 +6,7 @@ import BtcSpotHeader from "@/components/BtcSpotHeader";
 import CycleSignalTable from "@/components/CycleSignalTable";
 import { GradeBadge, TimingChip, chancePct, chanceTone, leadText, qTone } from "@/components/SignalMeta";
 import NavTabs from "@/components/NavTabs";
+import PositionPanel from "@/components/PositionPanel";
 import TickerInput from "@/components/TickerInput";
 import TimeframeSelect from "@/components/TimeframeSelect";
 import { SIGNAL_GROUPS, completedStarts, factsForLlm, snapshotOnPct } from "@/lib/cycle";
@@ -487,6 +488,15 @@ export default function CyclePage() {
               </ul>
             ) : null}
           </section>
+
+          {/* 지금 위치 — 등급표가 답하지 못하는 "이미 많이 오른 상태인가"를 잰다 */}
+          {report.position ? (
+            <PositionPanel
+              position={report.position}
+              bearPct={report.thresholds.bearPct}
+              windowAfter={report.window.after}
+            />
+          ) : null}
 
           {/* 매수 근거가 있는 신호 */}
           <section className="rounded-2xl border border-up/30 bg-up/5 p-4">
