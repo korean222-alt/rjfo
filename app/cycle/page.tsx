@@ -256,6 +256,30 @@ export default function CyclePage() {
         .sort((a, b) => (a.qValue ?? 1) - (b.qValue ?? 1)),
     [allSignals],
   );
+
+  /**
+   * 관문별로 몇 개가 걸렸는지.
+   *
+   * "A등급이 하나도 없다"만 보여주면 사용자는 그게 결론인지 고장인지 알 수 없다.
+   * 삼성전자처럼 0개가 나오는 종목에서 어느 관문이 막았는지(대개 표본이 적어
+   * 앞뒤 기간을 못 나누는 ④번) 보여주면 그게 판정이라는 걸 알 수 있다.
+   */
+  const gateBlockers = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of allSignals) {
+      for (const c of s.checks) {
+        if (!c.ok) counts.set(c.label, (counts.get(c.label) ?? 0) + 1);
+      }
+    }
+    return [...counts].sort((a, b) => b[1] - a[1]);
+  }, [allSignals]);
+
+  /** 같은 q값이 여러 개면 그건 '서로 구분이 안 된다'는 뜻이다 (BH 보정에서 묶인 것). */
+  const qTied = useMemo(() => {
+    const q = buySignals.map((s) => s.qValue).filter((v): v is number => v != null);
+    if (q.length < 2) return false;
+    return new Set(q.map((v) => v.toFixed(4))).size < q.length;
+  }, [buySignals]);
   const nearMiss = useMemo(
     () => allSignals.filter((s) => s.grade === "B").sort((a, b) => (a.qValue ?? 1) - (b.qValue ?? 1)),
     [allSignals],
@@ -470,6 +494,24 @@ export default function CyclePage() {
               <h2 className="text-sm font-semibold">사도 될 근거가 있는 신호</h2>
               <span className="text-xs text-muted">여섯 관문 전부 통과</span>
             </div>
+            {/* 채점의 자(사이클 수·창 비율)를 먼저 보여준다. 이게 종목마다 달라서
+                A등급 개수는 종목끼리 비교할 수 없다. */}
+            <p className="mt-1 text-[11px] leading-relaxed text-muted">
+              이 종목의 자: 상승장 전환 <b className="text-white">{report.cycles.length}번</b> · &lsquo;시작 부근&rsquo;이 전체의{" "}
+              <b className="text-white">{report.windowSharePct.toFixed(0)}%</b>
+              {report.windowShrunk ? (
+                <>
+                  {" "}
+                  (사이클이 잦아 창을 {report.windowRequested.after}→{report.window.after}거래일로 줄임)
+                </>
+              ) : null}{" "}
+              · 우연대비 천장 {(100 / Math.max(1, report.windowSharePct)).toFixed(1)}배
+            </p>
+            <p className="mt-1 text-[11px] leading-relaxed text-amber-300/80">
+              A등급 <b>개수</b>는 종목끼리 비교하지 마세요. 사이클이 3번 이하면 앞뒤 기간을 못 나눠 관문 ④에서 전부
+              떨어지고(그 종목이 나쁜 게 아닙니다), 너무 잦으면 창이 넓어져 관문 ②가 막힙니다. 같은 모양의 시세로
+              주기만 바꿔도 A등급 개수가 크게 요동칩니다.
+            </p>
 
             {buySignals.length ? (
               <ul className="mt-2.5 space-y-1.5">
@@ -525,8 +567,25 @@ export default function CyclePage() {
                     {nearMiss.length > 3 ? " 외" : ""}.
                   </>
                 ) : null}
+                {gateBlockers.length ? (
+                  <span className="mt-2 block text-[11px] text-muted">
+                    무엇이 막았나 (걸린 지표 수):{" "}
+                    {gateBlockers.slice(0, 3).map(([label, n]) => `${label} ${n}개`).join(" · ")}
+                    {report.cycles.length <= 3
+                      ? " — 상승장 전환이 3번 이하라 앞뒤 기간 검증(관문 ④) 자체가 불가능합니다. 기준을 낮춰 사이클을 더 잡거나, 더 긴 데이터가 필요합니다."
+                      : ""}
+                  </span>
+                ) : null}
               </p>
             )}
+
+            {qTied ? (
+              <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                위 신호들의 &lsquo;보정후&rsquo; 값이 같은 숫자로 겹칩니다. 다중검정 보정(q값)이 같은 구간으로 묶은 것이라,
+                <b className="text-white"> 서로 우열을 가릴 수 없다</b>는 뜻입니다 — 각각 독립으로 증명된 게 아닙니다.
+                게다가 조합은 구성 지표와 겹쳐 서로 독립이 아니므로, 이 값은 낙관적인 쪽입니다.
+              </p>
+            ) : null}
 
             <p className="mt-2.5 border-t border-border pt-2 text-[11px] leading-relaxed text-muted">
               여섯 관문: ① 다중검정 보정 후에도 우연이 아님 ② 아무 날이나 찍은 것보다 1.5배 이상 자주 상승장

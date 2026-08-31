@@ -39,6 +39,24 @@ export type MatchWindow = {
 /** 이 지표들은 대부분 '확인형'이라 바닥보다 늦게 뜬다. 뒤쪽 창을 넉넉히 잡는다. */
 export const DEFAULT_WINDOW: MatchWindow = { before: 20, after: 150 };
 
+/**
+ * '상승장 시작 부근'이 전체 기간에서 차지할 수 있는 최대 비율.
+ *
+ * 이게 왜 필요한가 (하이닉스에서 실제로 터진 문제):
+ *  사이클이 잦은 종목은 바닥이 17번씩 잡힌다. 바닥마다 170거래일씩 창을 주면
+ *  창이 전체의 55~60%를 덮는다. 그러면 '상승장 시작 부근'이라는 라벨이 아무것도
+ *  구분하지 못한다 — 우연대비(정확도 ÷ 창비율)의 천장이 1/0.58 = 1.7배로 눌려서,
+ *  진짜 좋은 지표조차 관문 ②(1.5배)를 간신히 넘거나 못 넘는다. 반대로 사이클이
+ *  적당히 잡힌 종목에서는 천장이 3~4배로 올라가 A등급이 쏟아진다.
+ *  같은 모양의 합성 시세로 주기만 바꿔 재보면 A등급이 0개 → 55개 → 5개로 요동친다.
+ *  종목의 우열이 아니라 사이클 밀도가 등급을 결정해 버리는 것이다.
+ *
+ *  그래서 창이 이 비율을 넘으면 뒤쪽 창(after)을 줄여 한도에 맞춘다. 창이 짧아지면
+ *  '늦게 뜬 확인형 지표'는 적중에서 빠지지만, 그건 사실을 반영하는 쪽이다 —
+ *  바닥 7개월 뒤에 켜지는 신호를 '상승장 시작을 잡았다'고 부를 수는 없다.
+ */
+export const MAX_WINDOW_SHARE = 0.35;
+
 /** 같은 신호가 며칠 안에 여러 번 깜빡이면 하나로 센다. */
 const EVENT_CLUSTER_DAYS = 5;
 
@@ -298,8 +316,12 @@ export function exclusiveCycleBounds(
     const next = i + 1 < cycles.length ? cycles[i + 1].troughIdx : null;
     const midLo = prev == null ? Number.NEGATIVE_INFINITY : Math.floor((prev + c.troughIdx) / 2) + 1;
     const midHi = next == null ? Number.POSITIVE_INFINITY : Math.floor((c.troughIdx + next) / 2);
-    let lo = Math.max(0, rawLo, midLo);
-    let hi = Math.min(barCount - 1, rawHi, midHi);
+    // 고점에서도 자른다. 다음 고점을 지난 날은 정의상 '상승장 시작 부근'이 아니라
+    // 이미 하락 국면이고, 직전 고점 이전은 앞 사이클의 상승 구간이다.
+    const peakLo = c.peakIdx == null ? Number.NEGATIVE_INFINITY : c.peakIdx;
+    const peakHi = c.nextPeakIdx == null ? Number.POSITIVE_INFINITY : c.nextPeakIdx;
+    let lo = Math.max(0, rawLo, midLo, peakLo);
+    let hi = Math.min(barCount - 1, rawHi, midHi, peakHi);
     if (lo > hi) {
       const pinned = Math.max(0, Math.min(barCount - 1, c.troughIdx));
       lo = pinned;
@@ -610,6 +632,54 @@ export function cycleWindowShare(
   let n = 0;
   for (let i = 0; i < barCount; i++) n += covered[i];
   return n / barCount;
+}
+
+export type ResolvedWindow = {
+  window: MatchWindow;
+  /** 창이 덮은 봉의 비율 (0~1). */
+  share: number;
+  /** 요청받은 창(보통 DEFAULT_WINDOW). 줄어들었는지 비교용. */
+  requested: MatchWindow;
+  /** 한도(MAX_WINDOW_SHARE)를 넘어 뒤쪽 창을 줄였는지. */
+  shrunk: boolean;
+};
+
+/**
+ * 창 비율이 한도를 넘으면 뒤쪽 창을 줄여서 맞춘다.
+ *
+ * after를 이분탐색으로 줄인다. 창을 줄이면 커버리지는 단조 감소하므로 이분탐색이
+ * 성립한다. 최소 20거래일은 남긴다 — 그보다 짧으면 '바닥 부근'이라는 개념 자체가
+ * 사라져서, 어떤 확인형 지표도 잡을 수 없는 창이 된다(그럴 땐 줄이기를 포기하고
+ * 한도 초과 사실을 경고로 알린다).
+ */
+export function resolveWindow(
+  barCount: number,
+  cycles: Cycle[],
+  requested: MatchWindow = DEFAULT_WINDOW,
+  maxShare: number = MAX_WINDOW_SHARE,
+): ResolvedWindow {
+  const shareOf = (win: MatchWindow) => cycleWindowShare(barCount, cycles, win);
+  const asked = shareOf(requested);
+  if (!cycles.length || asked <= maxShare) {
+    return { window: requested, share: asked, requested, shrunk: false };
+  }
+
+  const MIN_AFTER = 20;
+  let lo = MIN_AFTER;
+  let hi = requested.after;
+  let best = MIN_AFTER;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (shareOf({ ...requested, after: mid }) <= maxShare) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+
+  const window = { ...requested, after: best };
+  return { window, share: shareOf(window), requested, shrunk: true };
 }
 
 /**

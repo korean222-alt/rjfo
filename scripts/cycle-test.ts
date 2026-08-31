@@ -21,6 +21,7 @@ import {
   baselineStats,
 } from "../lib/cycle/evaluate";
 import { andState } from "../lib/cycle/combos";
+import { MAX_WINDOW_SHARE, resolveWindow } from "../lib/cycle/evaluate";
 import { fdrQValues } from "../lib/cycle/grade";
 import { toMonthly, toWeekly, projectToDaily, barsForView, snapDatesToView } from "../lib/cycle/resample";
 import { ema, macd, rsi, sma } from "../lib/cycle/ta";
@@ -818,7 +819,70 @@ console.log("\n[13] 랜덤워크 대조군 (아무 신호도 A가 되면 안 된
   }
 }
 
-console.log("\n[14] A등급 텔레그램 알림 — 무엇을 보내고 무엇을 안 보내나");
+console.log("\n[14] 창 비율 상한 — 사이클이 잦아도 '시작 부근'이 기간을 삼키지 않는다");
+{
+  // 같은 모양의 사이클을 주기만 바꿔 채운다. 사이클이 잦아지면 창이 겹쳐 커진다.
+  const wave = (period: number, total = 4000): number[] => {
+    const closes = [100];
+    let up = true;
+    let phase = 0;
+    const half = Math.round(period / 2);
+    for (let i = 1; i < total; i++) {
+      const step = up ? Math.pow(1.9, 1 / half) : Math.pow(0.55, 1 / half);
+      closes.push(Math.max(1, closes[i - 1] * step));
+      if (++phase >= half) { phase = 0; up = !up; }
+    }
+    return closes;
+  };
+
+  const dense = enrich(barsFromCloses(wave(300)));
+  const denseReport = analyzeCycle("TEST", dense);
+  assert(
+    denseReport.cycles.length >= 8,
+    `사이클이 잦은 시세: ${denseReport.cycles.length}개 잡힘`,
+  );
+  assert(
+    denseReport.windowSharePct <= MAX_WINDOW_SHARE * 100 + 0.5,
+    `창 비율이 한도 이하 (실제 ${denseReport.windowSharePct.toFixed(0)}%)`,
+  );
+  assert(denseReport.windowShrunk, "한도를 넘겨 창을 줄였다고 표시한다");
+  assert(
+    denseReport.window.after < denseReport.windowRequested.after,
+    `뒤쪽 창이 실제로 줄었다 (${denseReport.windowRequested.after}→${denseReport.window.after})`,
+  );
+
+  // 줄이기 전(요청한 창)이라면 한도를 넘었어야 한다 — 아니면 이 테스트가 무의미하다.
+  const rawShare = cycleWindowShare(dense.length, denseReport.cycles, denseReport.windowRequested);
+  assert(rawShare > MAX_WINDOW_SHARE, `원래 창이면 ${(rawShare * 100).toFixed(0)}%까지 덮었다`);
+
+  // 사이클이 드문 시세는 손대지 않는다.
+  const sparse = enrich(barsFromCloses(wave(1600)));
+  const sparseReport = analyzeCycle("TEST", sparse);
+  assert(!sparseReport.windowShrunk, "창이 좁으면 그대로 둔다");
+  assert(
+    sparseReport.window.after === DEFAULT_WINDOW.after,
+    `기본 창 유지 (실제 ${sparseReport.window.after})`,
+  );
+
+  // resolveWindow 단독: 한도 이하면 요청 그대로, 넘으면 이분탐색으로 맞춘다.
+  const kept = resolveWindow(sparse.length, sparseReport.cycles, DEFAULT_WINDOW);
+  assert(!kept.shrunk && kept.window.after === DEFAULT_WINDOW.after, "한도 이하는 그대로");
+  const cut = resolveWindow(dense.length, denseReport.cycles, DEFAULT_WINDOW);
+  assert(cut.share <= MAX_WINDOW_SHARE + 0.005, `줄인 뒤 비율 ${(cut.share * 100).toFixed(0)}%`);
+  assert(
+    resolveWindow(dense.length, denseReport.cycles, DEFAULT_WINDOW, 1).shrunk === false,
+    "한도를 1로 주면 줄이지 않는다",
+  );
+
+  // 창은 다음 고점을 넘지 않는다 (그 뒤는 이미 하락 국면이다).
+  const bounds = exclusiveCycleBounds(denseReport.cycles, dense.length, denseReport.window);
+  const overPeak = denseReport.cycles.filter(
+    (c, i) => c.nextPeakIdx != null && bounds[i].hi > c.nextPeakIdx,
+  );
+  assert(overPeak.length === 0, `창이 다음 고점을 넘지 않는다 (넘은 사이클 ${overPeak.length}개)`);
+}
+
+console.log("\n[15] A등급 텔레그램 알림 — 무엇을 보내고 무엇을 안 보내나");
 {
   type Graded = CycleReport["signals"][number];
 
@@ -903,10 +967,10 @@ console.log("\n[14] A등급 텔레그램 알림 — 무엇을 보내고 무엇�
   assert(!/undefined|NaN/.test(text), `본문에 undefined/NaN 없음 (${text.slice(0, 80)})`);
 }
 
-// ── 15. 실데이터 (인자로 티커를 주면) ─────────────────────────────
+// ── 16. 실데이터 (인자로 티커를 주면) ─────────────────────────────
 const ticker = process.argv[2];
 if (ticker) {
-  console.log(`\n[15] 실데이터: ${ticker}`);
+  console.log(`\n[16] 실데이터: ${ticker}`);
   (async () => {
     const { loadBars, MAX_YEARS } = await import("../lib/data");
     const { normalizeTicker } = await import("../lib/data/provider");

@@ -28,6 +28,7 @@ type AlertsState = {
   storage: boolean;
   storageSource?: { urlKey: string; tokenKey: string } | null;
   telegram: { botToken: boolean; chatId: boolean };
+  deployment?: { env: string; branch: string | null };
 };
 
 type GradeWatch = { ticker: string; createdAt: string; notified?: Record<string, string> };
@@ -229,6 +230,7 @@ export default function AlertsPage() {
 
   const telegramReady = Boolean(state?.telegram.botToken && state?.telegram.chatId);
   const ready = Boolean(state?.storage) && telegramReady;
+  const isPreview = state?.deployment?.env === "preview";
 
   return (
     <main className="mx-auto max-w-lg px-4 py-6 pb-24">
@@ -253,6 +255,19 @@ export default function AlertsPage() {
             <li>{state.telegram.chatId ? "✅" : "❌"} 채팅 ID (TELEGRAM_CHAT_ID)</li>
             <li>{state.storage ? "✅" : "❌"} 알림 목록 저장소 (KV / Upstash Redis)</li>
           </ul>
+          {/* Vercel 환경변수는 Production / Preview가 따로다. 여기가 Preview면
+              "예전에 넣었는데 왜 또?"의 답이 대개 이것이다. */}
+          {isPreview && (!state.telegram.botToken || !state.telegram.chatId) ? (
+            <p className="mt-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
+              지금 보고 있는 건 <b>Preview 배포</b>
+              {state.deployment?.branch ? <> (브랜치 <code>{state.deployment.branch}</code>)</> : null}입니다.
+              Vercel 환경변수는 <b>Production / Preview가 따로</b>라서, 전에 Production에만 넣었다면 여기서는 없는
+              것으로 나옵니다 — 예전에 테스트 알림을 받은 것과 모순이 아닙니다. Vercel → Settings → Environment
+              Variables에서 두 값의 체크박스에 <b>Preview</b>도 켜고 재배포하면 이 화면에서도 ✅가 됩니다.
+              그리고 <b>크론(정기 알림)은 Production 배포에서만 돕니다</b> — 실제로 알림을 받으려면 이 코드가
+              main에 머지돼 Production으로 올라가 있어야 합니다.
+            </p>
+          ) : null}
           {telegramReady ? (
             <p className="mt-2 text-xs text-amber-100/80">
               테스트 알림은 오는 게 맞습니다 — 그건 봇 토큰과 채팅 ID만 쓰기 때문입니다.
@@ -271,6 +286,7 @@ export default function AlertsPage() {
       {state?.storage && state.storageSource ? (
         <p className="mb-6 text-xs text-muted">
           저장소 연결됨 · 환경변수 <code>{state.storageSource.urlKey}</code>
+          {state.deployment ? <> · 배포 {state.deployment.env}{state.deployment.branch ? ` (${state.deployment.branch})` : ""}</> : null}
         </p>
       ) : null}
 

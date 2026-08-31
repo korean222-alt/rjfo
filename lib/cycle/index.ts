@@ -18,6 +18,8 @@ import {
   cycleWindowShare,
   evaluateSignal,
   onCountAt,
+  resolveWindow,
+  MAX_WINDOW_SHARE,
   type ForwardStat,
   type MatchWindow,
   type SignalEvaluation,
@@ -67,6 +69,15 @@ export type CycleReport = {
   baseline: Record<string, ForwardStat>;
   /** 전체 기간 중 '상승장 시작 부근'이 차지하는 비율(%). 지표 lift의 기준선. */
   windowSharePct: number;
+  /**
+   * 창이 한도(전체의 35%)를 넘어 뒤쪽을 줄였는지, 그리고 원래 요청한 창.
+   *
+   * 왜 보여주는가: 사이클이 잦은 종목은 창이 전체의 절반을 넘어 '상승장 시작 부근'이라는
+   * 라벨이 의미를 잃는다. 줄였다는 사실을 숨기면, 같은 지표가 종목마다 다른 창으로
+   * 채점된 걸 모른 채 등급을 비교하게 된다.
+   */
+  windowShrunk: boolean;
+  windowRequested: MatchWindow;
   signals: GradedSignal[];
   /**
    * 지표 두 개를 겹친 매수 규칙. "365일선 위 + 주봉 MACD 골든크로스"처럼.
@@ -116,7 +127,7 @@ export function analyzeCycle(
     bearPct: opts.thresholds?.bearPct ?? base.bearPct,
     bullPct: opts.thresholds?.bullPct ?? base.bullPct,
   };
-  const window: MatchWindow = {
+  const requestedWindow: MatchWindow = {
     before: opts.window?.before ?? DEFAULT_WINDOW.before,
     after: opts.window?.after ?? DEFAULT_WINDOW.after,
   };
@@ -125,7 +136,11 @@ export function analyzeCycle(
   const signals: SignalSeries[] = buildSignals(bars);
   const baseline = baselineStats(bars);
 
-  const windowShare = cycleWindowShare(bars.length, cycles, window);
+  // 창이 전체 기간의 35%를 넘게 덮으면 뒤쪽을 줄인다. 그래야 우연대비의 천장이
+  // 눌리지 않고, 사이클이 잦은 종목과 드문 종목을 같은 자로 재게 된다.
+  const resolved = resolveWindow(bars.length, cycles, requestedWindow);
+  const window = resolved.window;
+  const windowShare = resolved.share;
   const singles = signals
     .map((s) => evaluateSignal(bars, s, cycles, baseline, windowShare, { window }))
     .sort((a, b) => b.score - a.score);
@@ -212,9 +227,21 @@ export function analyzeCycle(
   );
   if (cycles.length) {
     warnings.push(
-      `전체 기간의 ${(windowShare * 100).toFixed(0)}%가 '상승장 시작 부근'입니다. 자주 켜지는 지표는 그것만으로도 적중률이 높게 나오므로, 적중률보다 '우연대비' 배수를 보세요.`,
+      `전체 기간의 ${(windowShare * 100).toFixed(0)}%가 '상승장 시작 부근'입니다. 자주 켜지는 지표는 그것만으로도 적중률이 높게 나오므로, 적중률보다 '우연대비' 배수를 보세요. ` +
+        `이 비율이 곧 우연대비의 천장을 정합니다 — 지금은 최대 ${(1 / windowShare).toFixed(1)}배까지만 나올 수 있습니다.`,
     );
   }
+  if (resolved.shrunk) {
+    warnings.push(
+      `이 종목은 사이클이 ${cycles.length}번이나 잡혀서, 바닥마다 ${requestedWindow.after}거래일씩 창을 주면 ` +
+        `'상승장 시작 부근'이 전체의 ${(cycleWindowShare(bars.length, cycles, requestedWindow) * 100).toFixed(0)}%를 덮습니다. ` +
+        `그러면 그 라벨이 아무것도 구분하지 못하므로(우연대비 천장이 1.x배로 눌린다) 뒤쪽 창을 ${window.after}거래일로 줄여 ` +
+        `전체의 ${(MAX_WINDOW_SHARE * 100).toFixed(0)}% 한도에 맞췄습니다. 바닥 한참 뒤에 켜지는 확인형 지표는 이 창에서 적중으로 안 잡힙니다.`,
+    );
+  }
+  warnings.push(
+    "A등급 개수는 종목끼리 비교하면 안 됩니다. 사이클이 몇 번 잡혔는지에 크게 좌우됩니다 — 표본이 적으면(3번 이하) 앞뒤 기간 검증을 못 해 관문 ④에서 전부 탈락하고, 너무 잦으면 창이 넓어져 관문 ②가 막힙니다. 같은 모양의 합성 시세로 주기만 바꿔도 A등급 개수가 요동칩니다.",
+  );
   warnings.push(
     "여기 지표는 대부분 '확인형'입니다. 바닥을 예측한 게 아니라 추세가 이미 바뀐 걸 알려줍니다. 리드타임이 양수면 바닥보다 늦게 떴다는 뜻입니다.",
   );
@@ -237,6 +264,8 @@ export function analyzeCycle(
     regime: currentRegime(bars, thresholds),
     baseline,
     windowSharePct: windowShare * 100,
+    windowShrunk: resolved.shrunk,
+    windowRequested: requestedWindow,
     signals: evaluated,
     combos,
     commonKeys,
