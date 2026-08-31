@@ -13,6 +13,9 @@ import { loadBars } from "../lib/data";
 import { __clearMemoryCache, setCachedBars } from "../lib/data/cache";
 import { DataProviderError } from "../lib/data/provider";
 import { parseStooqCsv, toStooqSymbol } from "../lib/data/stooq";
+import { parseNaverSise, toNaverSymbol } from "../lib/data/naver";
+import { getProviders } from "../lib/data";
+import { kvSource } from "../lib/kv";
 import { fetchBarsInBrowser } from "../lib/client-quotes";
 import { BarValidationError, validateBars } from "../lib/validate-bars";
 import { parseTwelveValues, readTwelveResponse } from "../lib/data/twelvedata";
@@ -626,6 +629,101 @@ console.log("\n[23] 분할 조정 — 정분할/병합, 이미 조정된 시계�
   );
   assert(revAdj[0].close === 100, `병합 이미 조정이면 그대로 (실제 ${revAdj[0].close})`);
   assert(revAdj[0].volume === 1000, `병합 이미 조정이면 거래량 그대로 (실제 ${revAdj[0].volume})`);
+}
+
+console.log("\n[24] 한국 종목 — 네이버가 1순위, Stooq는 아예 안 부른다");
+{
+  reset();
+  const chain = getProviders("005930.KS").map((p) => p.name);
+  assert(chain[0] === "naver", `1순위가 네이버 (실제 ${chain[0]})`);
+  assert(chain.includes("yahoo"), "야후는 폴백으로 남는다");
+  assert(!chain.includes("twelvedata"), "Twelve Data는 KRX가 없으니 뺀다");
+
+  // 키가 있어도 한국 종목에서는 Twelve Data를 부르지 않는다.
+  process.env.TWELVE_DATA_API_KEY = "test-key";
+  assert(
+    !getProviders("000660.KQ").map((p) => p.name).includes("twelvedata"),
+    "키가 있어도 KRX는 Twelve Data를 건너뛴다",
+  );
+  reset();
+
+  assert(toNaverSymbol("005930.KS") === "005930", "005930.KS → 005930");
+  assert(toNaverSymbol("AAPL") === null, "미국 티커는 네이버 심볼이 아니다");
+
+  const sise = `[['날짜', '시가', '고가', '저가', '종가', '거래량', '외국인소진율'],
+['20240102', 79600, 79800, 78200, 79600, 17142848, 54.10],
+['20240103', 78800, 79000, 77000, 77000, 21753502, 54.03],
+['20240103', 1, 1, 1, 1, 1, 0.0],
+['20240104', 76100, 77000, 76100, 76600, 15324439, 53.98]
+]`;
+  const naverBars = parseNaverSise(sise);
+  assert(naverBars.length === 3, `헤더·중복 제외 3봉 (실제 ${naverBars.length})`);
+  assert(naverBars[0].date === "2024-01-02", `날짜 변환 (실제 ${naverBars[0].date})`);
+  assert(naverBars[0].close === 79600 && naverBars[0].volume === 17142848, "종가·거래량 파싱");
+  assert(naverBars[2].date === "2024-01-04", "오래된 순 정렬");
+  assert(parseNaverSise("<html>없음</html>").length === 0, "HTML이 오면 0봉");
+
+  // 실제 체인: 네이버가 답하면 야후·Stooq는 부르지 않는다.
+  const rows = Array.from({ length: 80 }, (_, i) => {
+    const d = new Date(Date.UTC(2024, 0, 1) + i * 86400000).toISOString().slice(0, 10).replace(/-/g, "");
+    return `['${d}', 100, 110, 90, ${100 + i}, ${1000 + i}, 50.0]`;
+  }).join(",\n");
+  install((url) => {
+    if (url.includes("api.finance.naver.com")) {
+      return new Response(`[['날짜','시가','고가','저가','종가','거래량','외국인소진율'],\n${rows}]`, {
+        status: 200,
+      });
+    }
+    return new Response("Too Many Requests", { status: 429 });
+  });
+  const krBars = await loadBars("005930.KS");
+  restore();
+  assert(krBars.length === 80, `네이버에서 ${krBars.length}봉`);
+  assert(calls.length === 1 && calls[0].includes("api.finance.naver.com"), "네이버 한 번만 호출");
+  assert(calls[0].includes("symbol=005930"), "6자리 코드로 조회");
+}
+
+console.log("\n[25] 한국 종목 — 네이버·야후가 다 막히면 원인을 정확히 말한다");
+{
+  reset();
+  install((url) => {
+    if (url.includes("api.finance.naver.com")) return new Response("<html>차단</html>", { status: 200 });
+    return new Response("Too Many Requests", { status: 429 });
+  });
+  let message = "";
+  try {
+    await loadBars("005930.KS");
+  } catch (e) {
+    message = (e as Error).message;
+  }
+  restore();
+  assert(/한국 종목/.test(message), `한국 종목 안내를 담는다 (실제: ${message.slice(0, 60)})`);
+  assert(!/twelvedata.com에서 무료 API 키/.test(message), "KRX에 없는 소스를 권하지 않는다");
+  assert(!calls.some((u) => u.includes("stooq")), "Stooq는 한국 종목에 호출하지 않는다");
+}
+
+console.log("\n[26] KV 환경변수 — 접두사가 붙어 있어도 찾아낸다");
+{
+  reset();
+  assert(kvSource() === null, "아무것도 없으면 null");
+
+  process.env.KV_REST_API_URL_KV_REST_API_URL = "https://example.upstash.io";
+  process.env.KV_REST_API_URL_KV_REST_API_TOKEN = "token";
+  const prefixed = kvSource();
+  assert(prefixed?.urlKey === "KV_REST_API_URL_KV_REST_API_URL", `접두사 붙은 이름 인식 (실제 ${prefixed?.urlKey})`);
+  assert(prefixed?.tokenKey === "KV_REST_API_URL_KV_REST_API_TOKEN", "같은 접두사의 토큰과 짝지음");
+  delete process.env.KV_REST_API_URL_KV_REST_API_URL;
+  delete process.env.KV_REST_API_URL_KV_REST_API_TOKEN;
+
+  process.env.UPSTASH_REDIS_REST_URL = "https://example.upstash.io/";
+  process.env.UPSTASH_REDIS_REST_TOKEN = "token";
+  assert(kvSource()?.urlKey === "UPSTASH_REDIS_REST_URL", "Upstash 기본 이름 인식");
+  delete process.env.UPSTASH_REDIS_REST_URL;
+  delete process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  process.env.KV_REST_API_URL = "https://example.upstash.io";
+  assert(kvSource() === null, "토큰이 없으면 연결로 보지 않는다");
+  delete process.env.KV_REST_API_URL;
 }
 
 console.log(failures === 0 ? "\n✅ 전부 통과\n" : `\n❌ ${failures}개 실패\n`);

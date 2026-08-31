@@ -7,7 +7,8 @@
  * 정확히 찍는지 본다. 라벨링이 틀리면 나머지 통계는 전부 무의미하다.
  */
 import { enrich } from "../lib/indicators";
-import { analyzeCycle, completedStarts, snapshotOnPct } from "../lib/cycle";
+import { analyzeCycle, completedStarts, snapshotOnPct, type CycleReport } from "../lib/cycle";
+import { findGradeHits, formatGradeAlert } from "../lib/alerts/grade-alert";
 import { findCycles, findPivots, STOCK_THRESHOLDS, CRYPTO_THRESHOLDS } from "../lib/cycle/regime";
 import {
   circularShiftP,
@@ -817,10 +818,95 @@ console.log("\n[13] 랜덤워크 대조군 (아무 신호도 A가 되면 안 된
   }
 }
 
-// ── 14. 실데이터 (인자로 티커를 주면) ─────────────────────────────
+console.log("\n[14] A등급 텔레그램 알림 — 무엇을 보내고 무엇을 안 보내나");
+{
+  type Graded = CycleReport["signals"][number];
+
+  const signal = (over: Partial<Graded>): Graded =>
+    ({
+      key: "ma200",
+      label: "200일선 위",
+      group: "추세",
+      why: "",
+      timeframe: "일봉",
+      events: [],
+      eventCount: 5,
+      inWindowEvents: [],
+      cycleHits: [],
+      hitCount: 3,
+      hitRate: 100,
+      alreadyOnCount: 0,
+      medianLeadDays: 12,
+      medianCaptureSharePct: 70,
+      falseAlarms: 1,
+      precision: 80,
+      lift: 2.4,
+      chance: 0.01,
+      forward: {},
+      drawdown: { n: 3, medianPct: -8, worstPct: -21 },
+      edge: 12,
+      timing: "후행",
+      walkForward: null,
+      currentlyOn: true,
+      lastEventDate: "2026-08-31",
+      daysSinceLastEvent: 0,
+      score: 90,
+      qValue: 0.03,
+      grade: "A",
+      checks: [],
+      passCount: 6,
+      ...over,
+    }) as Graded;
+
+  const report = {
+    ticker: "005930.KS",
+    periodEnd: "2026-08-31",
+    cycles: [{}, {}, {}],
+    regime: { phase: "상승" },
+    now: { date: "2026-08-31", on: 18, total: 30 },
+    signals: [
+      signal({}),
+      // 등급이 낮으면 안 보낸다
+      signal({ key: "rsi_d50", label: "RSI 50 위", grade: "B", passCount: 5 }),
+      // A등급이지만 꺼져 있으면 안 보낸다
+      signal({ key: "macd_d", label: "일봉 MACD 골든크로스", currentlyOn: false }),
+      // A등급이고 켜져 있지만 100일 전에 켜진 것 — 새 신호가 아니다
+      signal({ key: "ma365", label: "365일선 위", daysSinceLastEvent: 100, lastEventDate: "2026-04-01" }),
+    ],
+    combos: [
+      signal({
+        key: "combo:off_low_20+rsi_recover",
+        label: "52주 저점 +20% + RSI 과매도 탈출",
+        daysSinceLastEvent: 1,
+        lastEventDate: "2026-08-28",
+      }),
+    ],
+  } as unknown as CycleReport;
+
+  const hits = findGradeHits(report);
+  assert(hits.length === 2, `A등급 + 켜짐 + 새로 켜진 것만 2개 (실제 ${hits.length}: ${hits.map((h) => h.label).join(", ")})`);
+  assert(hits[0].kind === "조합", `조합을 먼저 (실제 ${hits[0].kind})`);
+  assert(hits.every((h) => h.passCount === 6), "여섯 관문 통과만");
+  assert(!hits.some((h) => h.label === "365일선 위"), "오래전에 켜진 신호는 새 알림이 아니다");
+
+  // 같은 점등은 두 번 보내지 않는다 (신호일까지 키에 들어간다).
+  const notified = { [hits[0].dedupeKey]: "2026-08-31" };
+  const again = findGradeHits(report, notified);
+  assert(again.length === 1, `이미 보낸 건 제외 (실제 ${again.length})`);
+  assert(again[0].dedupeKey !== hits[0].dedupeKey, "남은 건 아직 안 보낸 신호");
+
+  const text = formatGradeAlert("005930.KS", report, hits);
+  assert(text.includes("005930.KS"), "본문에 티커");
+  assert(text.includes("52주 저점 +20% + RSI 과매도 탈출"), "본문에 신호 이름");
+  assert(text.includes("여섯 관문 6/6"), "본문에 관문 통과 수");
+  assert(text.includes("과거 패턴이며 투자 판단의 근거가 아닙니다."), "면책 문구");
+  assert(!/undefined|NaN/.test(text), `본문에 undefined/NaN 없음 (${text.slice(0, 80)})`);
+}
+
+// ── 15. 실데이터 (인자로 티커를 주면) ─────────────────────────────
 const ticker = process.argv[2];
 if (ticker) {
-  console.log(`\n[14] 실데이터: ${ticker}`);
+  console.log(`\n[15] 실데이터: ${ticker}`);
   (async () => {
     const { loadBars, MAX_YEARS } = await import("../lib/data");
     const { normalizeTicker } = await import("../lib/data/provider");

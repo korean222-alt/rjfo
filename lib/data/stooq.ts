@@ -163,6 +163,12 @@ export class StooqProvider implements DataProvider {
   readonly name = "stooq";
 
   async getDailyBars(ticker: string, years: number): Promise<Bar[]> {
+    // Stooq에는 한국 주식이 없다. 그래도 물어보면 CSV 대신 안내 페이지가 오고,
+    // 그 HTML 조각이 화면 에러 메시지에 그대로 실려 원인을 가린다.
+    if (/^\d{6}(\.(KS|KQ))?$/i.test(ticker.trim())) {
+      throw new DataProviderError("보조 소스(Stooq)는 한국 주식을 제공하지 않습니다.", 422);
+    }
+
     const symbol = toStooqSymbol(ticker);
     let lastError: DataProviderError | null = null;
 

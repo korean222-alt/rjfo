@@ -159,6 +159,11 @@ async function fetchStooqInBrowser(
   ticker: string,
   years: number,
 ): Promise<{ bars: Bar[] | null; detail: string }> {
+  // Stooq에는 한국 주식이 없다. 물어봐도 CSV 대신 안내 페이지만 온다.
+  if (/^\d{6}(\.(KS|KQ))?$/i.test(ticker.trim())) {
+    return { bars: null, detail: "Stooq는 한국 주식을 제공하지 않습니다." };
+  }
+
   let detail = "";
   for (const symbol of tickerFallbacks(ticker).map(toStooqSymbol)) {
     for (const base of STOOQ_HOSTS) {
