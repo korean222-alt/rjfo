@@ -86,19 +86,22 @@ export default function CycleChart({
   tf = "1d",
 }: Props) {
   const mainRef = useRef<HTMLDivElement>(null);
-  const paneRef = useRef<HTMLDivElement>(null);
+  // 패널은 최대 2개까지 (조합 신호는 단위가 다른 지표 둘을 같이 봐야 한다).
+  const paneRef0 = useRef<HTMLDivElement>(null);
+  const paneRef1 = useRef<HTMLDivElement>(null);
 
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const overlayRefs = useRef<ISeriesApi<"Line">[]>([]);
-  const paneChartRef = useRef<IChartApi | null>(null);
+  const paneChartsRef = useRef<IChartApi[]>([]);
 
   const [log, setLog] = useState(true);
   /** 보여줄 기간 라벨. 봉 수는 tf에 따라 달라진다. */
   const [rangeLabel, setRangeLabel] = useState<RangeLabel>("전체");
   const span = RANGE_SPAN[tf][rangeLabel];
 
-  const pane = plot?.pane ?? null;
+  /** 그릴 별도 패널들. 예전 형식(pane 하나)도 그대로 받는다. */
+  const panes = (plot?.panes?.length ? plot.panes : plot?.pane ? [plot.pane] : []).slice(0, 2);
 
   // ── 메인 캔들 차트 ──────────────────────────────────────────────
   useEffect(() => {
@@ -196,8 +199,10 @@ export default function CycleChart({
 
   // 패널이 붙으면 시간축이 위아래로 두 번 나온다. 위쪽은 감춘다.
   useEffect(() => {
-    chartRef.current?.applyOptions({ timeScale: { visible: !pane } });
-  }, [pane, series, log]);
+    chartRef.current?.applyOptions({ timeScale: { visible: panes.length === 0 } });
+    // panes는 매 렌더 새 배열이라 길이만 본다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plot, series, log]);
 
   // ── 선택한 지표의 오버레이 (가격 위에 겹치는 선) ───────────────
   useEffect(() => {
@@ -227,79 +232,103 @@ export default function CycleChart({
   // ── 별도 패널 (MACD, RSI처럼 가격과 단위가 다른 지표) ──────────
   //
   // lightweight-charts v4에는 진짜 멀티 패널이 없다. 차트를 하나 더 만들고
-  // 시간축을 양방향으로 묶는 게 표준 방법이다.
+  // 시간축을 양방향으로 묶는 게 표준 방법이다. 조합 신호는 그런 패널이 둘일 수 있어
+  // 두 개까지 만들고 전부 메인 차트에 묶는다.
   useEffect(() => {
-    const el = paneRef.current;
     const main = chartRef.current;
-    if (!el || !main || !pane) return;
+    const els = [paneRef0.current, paneRef1.current];
+    if (!main || !panes.length) return;
 
-    const chart = createChart(el, {
-      ...baseOptions(el.clientWidth, 150, false),
-      rightPriceScale: { borderColor: GRID, mode: PriceScaleMode.Normal },
+    const created: IChartApi[] = [];
+    const unsubs: (() => void)[] = [];
+
+    panes.forEach((pane, i) => {
+      const el = els[i];
+      if (!el) return;
+
+      const chart = createChart(el, {
+        ...baseOptions(el.clientWidth, 150, false),
+        rightPriceScale: { borderColor: GRID, mode: PriceScaleMode.Normal },
+      });
+      created.push(chart);
+
+      let first: ISeriesApi<"Line"> | null = null;
+      for (const line of pane.lines) {
+        if (!line.data.length) continue;
+        const s = chart.addLineSeries({
+          color: line.color,
+          lineWidth: (line.width ?? 1) as 1 | 2 | 3,
+          lineStyle: line.dashed ? LineStyle.Dashed : LineStyle.Solid,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        s.setData(
+          line.data.map((p) => ({ time: p.date as unknown as UTCTimestamp, value: p.value })),
+        );
+        first ??= s;
+      }
+      for (const level of pane.levels) {
+        first?.createPriceLine({
+          price: level.value,
+          color: "#5b6676",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: level.label,
+        });
+      }
+
+      // 양방향 동기화. 가드가 없으면 서로를 계속 호출해 무한 루프가 된다.
+      // 패널이 둘일 때도 메인만 거치면 셋 다 같은 구간을 본다.
+      let syncing = false;
+      const link = (to: IChartApi) => (range: LogicalRange | null) => {
+        if (syncing || !range) return;
+        syncing = true;
+        to.timeScale().setVisibleLogicalRange(range);
+        syncing = false;
+      };
+      const toPane = link(chart);
+      const toMain = link(main);
+      main.timeScale().subscribeVisibleLogicalRangeChange(toPane);
+      chart.timeScale().subscribeVisibleLogicalRangeChange(toMain);
+      unsubs.push(() => {
+        main.timeScale().unsubscribeVisibleLogicalRangeChange(toPane);
+        chart.timeScale().unsubscribeVisibleLogicalRangeChange(toMain);
+      });
+
+      const initial = main.timeScale().getVisibleLogicalRange();
+      if (initial) chart.timeScale().setVisibleLogicalRange(initial);
     });
-    paneChartRef.current = chart;
 
-    let first: ISeriesApi<"Line"> | null = null;
-    for (const line of pane.lines) {
-      if (!line.data.length) continue;
-      const s = chart.addLineSeries({
-        color: line.color,
-        lineWidth: (line.width ?? 1) as 1 | 2 | 3,
-        lineStyle: line.dashed ? LineStyle.Dashed : LineStyle.Solid,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-      s.setData(
-        line.data.map((p) => ({ time: p.date as unknown as UTCTimestamp, value: p.value })),
-      );
-      first ??= s;
-    }
-    for (const level of pane.levels) {
-      first?.createPriceLine({
-        price: level.value,
-        color: "#5b6676",
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: level.label,
-      });
-    }
+    paneChartsRef.current = created;
 
-    // 양방향 동기화. 가드가 없으면 서로를 계속 호출해 무한 루프가 된다.
-    let syncing = false;
-    const link = (from: IChartApi, to: IChartApi) => (range: LogicalRange | null) => {
-      if (syncing || !range) return;
-      syncing = true;
-      to.timeScale().setVisibleLogicalRange(range);
-      syncing = false;
+    const onResize = () => {
+      created.forEach((c, i) => {
+        const el = els[i];
+        if (el) c.applyOptions({ width: el.clientWidth });
+      });
     };
-    const toPane = link(main, chart);
-    const toMain = link(chart, main);
-    main.timeScale().subscribeVisibleLogicalRangeChange(toPane);
-    chart.timeScale().subscribeVisibleLogicalRangeChange(toMain);
-
-    const initial = main.timeScale().getVisibleLogicalRange();
-    if (initial) chart.timeScale().setVisibleLogicalRange(initial);
-
-    const onResize = () => chart.applyOptions({ width: el.clientWidth });
     window.addEventListener("resize", onResize);
     return () => {
       window.removeEventListener("resize", onResize);
-      main.timeScale().unsubscribeVisibleLogicalRangeChange(toPane);
-      chart.timeScale().unsubscribeVisibleLogicalRangeChange(toMain);
-      paneChartRef.current = null;
-      chart.remove();
+      for (const u of unsubs) u();
+      for (const c of created) c.remove();
+      paneChartsRef.current = [];
     };
-  }, [pane, series, log]);
+    // panes는 plot에서 파생된다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plot, series, log]);
 
-  const legend = [...(plot?.overlays ?? []), ...(pane?.lines ?? [])].filter((l) => l.data.length);
+  const legend = [...(plot?.overlays ?? []), ...panes.flatMap((p) => p.lines)].filter(
+    (l) => l.data.length,
+  );
 
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-          {legend.map((l) => (
-            <span key={l.label} className="flex items-center gap-1 text-[11px] text-muted">
+          {legend.map((l, i) => (
+            <span key={`${i}-${l.label}`} className="flex items-center gap-1 text-[11px] text-muted">
               <span
                 aria-hidden
                 className="inline-block h-0.5 w-3 rounded"
@@ -334,10 +363,16 @@ export default function CycleChart({
 
       <div ref={mainRef} className="rounded-2xl border border-border bg-surface p-1" />
 
-      {pane ? (
+      {panes[0] ? (
         <div className="rounded-2xl border border-border bg-surface p-1">
-          <p className="px-2 pt-1 text-[11px] text-muted">{pane.title}</p>
-          <div ref={paneRef} />
+          <p className="px-2 pt-1 text-[11px] text-muted">{panes[0].title}</p>
+          <div ref={paneRef0} />
+        </div>
+      ) : null}
+      {panes[1] ? (
+        <div className="rounded-2xl border border-border bg-surface p-1">
+          <p className="px-2 pt-1 text-[11px] text-muted">{panes[1].title}</p>
+          <div ref={paneRef1} />
         </div>
       ) : null}
     </div>

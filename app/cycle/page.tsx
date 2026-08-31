@@ -4,11 +4,11 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BtcSpotHeader from "@/components/BtcSpotHeader";
 import CycleSignalTable from "@/components/CycleSignalTable";
-import { GradeBadge, TimingChip, chancePct, chanceTone, leadText } from "@/components/SignalMeta";
+import { GradeBadge, TimingChip, chancePct, chanceTone, leadText, qTone } from "@/components/SignalMeta";
 import NavTabs from "@/components/NavTabs";
 import TickerInput from "@/components/TickerInput";
 import TimeframeSelect from "@/components/TimeframeSelect";
-import { SIGNAL_GROUPS, completedStarts, snapshotOnPct } from "@/lib/cycle";
+import { SIGNAL_GROUPS, completedStarts, factsForLlm, snapshotOnPct } from "@/lib/cycle";
 import { enrichForPlot, plotForView } from "@/lib/cycle/plot";
 import {
   barsForView,
@@ -17,7 +17,7 @@ import {
   snapDatesToView,
   type ChartTf,
 } from "@/lib/cycle/resample";
-import { runCycle, type CyclePayload } from "@/lib/cycle-client";
+import { askCycle, runCycle, type CyclePayload } from "@/lib/cycle-client";
 import { isCryptoTicker, isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import { clearCycle, loadCycle, saveCycle } from "@/lib/session";
 import { toTradingViewSymbol } from "@/lib/tradingview";
@@ -42,7 +42,7 @@ function signed(n: number | null | undefined, digits = 0): string {
 export default function CyclePage() {
   const [ticker, setTicker] = useState("");
   const [payload, setPayload] = useState<CyclePayload | null>(null);
-  const [busy, setBusy] = useState<null | "analyze" | "fallback" | "ask">(null);
+  const [busy, setBusy] = useState<null | "analyze" | "fallback">(null);
   const [error, setError] = useState<string | null>(null);
   const [tickerError, setTickerError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -50,6 +50,10 @@ export default function CyclePage() {
   const [bearPct, setBearPct] = useState<number | null>(null);
   const [bullPct, setBullPct] = useState<number | null>(null);
   const [question, setQuestion] = useState("");
+  /** 후속 질문과 답. 리포트를 다시 계산하지 않고 이 자리에서만 주고받는다. */
+  const [qa, setQa] = useState<{ q: string; a: string; model: string | null } | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
   const [tf, setTf] = useState<ChartTf>("1d");
   const chartRef = useRef<HTMLDivElement>(null);
 
@@ -74,21 +78,20 @@ export default function CyclePage() {
   }, []);
 
   const run = useCallback(
-    async (rawTicker?: string, extra?: { bearPct?: number; bullPct?: number; question?: string }) => {
+    async (rawTicker?: string, extra?: { bearPct?: number; bullPct?: number }) => {
       setError(null);
       setTickerError(null);
       const t = normalizeTicker(rawTicker ?? ticker);
       if (!t) return setTickerError("티커를 입력해 주세요.");
       if (!isValidTicker(t)) return setTickerError("올바른 티커 형식이 아닙니다.");
 
-      setBusy(extra?.question ? "ask" : "analyze");
+      setBusy("analyze");
       try {
         const next = await runCycle(
           {
             ticker: t,
             bearPct: extra?.bearPct ?? bearPct ?? undefined,
             bullPct: extra?.bullPct ?? bullPct ?? undefined,
-            question: extra?.question,
           },
           () => setBusy("fallback"),
         );
@@ -97,6 +100,8 @@ export default function CyclePage() {
         setBearPct(next.report.thresholds.bearPct);
         setBullPct(next.report.thresholds.bullPct);
         setSelectedKey(null);
+        setQa(null);
+        setAskError(null);
         saveCycle(next);
       } catch (e) {
         setError((e as Error).message);
@@ -108,6 +113,26 @@ export default function CyclePage() {
   );
 
   const report = payload?.report ?? null;
+
+  /**
+   * 후속 질문. 분석을 다시 돌리지 않고, 이미 가진 리포트의 FACTS만 보낸다.
+   * (예전에는 여기서 /api/cycle을 통째로 다시 불러서 무엇을 물어도 같은 요약이 나왔다.)
+   */
+  const ask = useCallback(async () => {
+    const q = question.trim();
+    if (!q || !report) return;
+    setAsking(true);
+    setAskError(null);
+    try {
+      const { answer, model } = await askCycle(q, factsForLlm(report));
+      setQa({ q, a: answer, model });
+      setQuestion("");
+    } catch (e) {
+      setAskError((e as Error).message);
+    } finally {
+      setAsking(false);
+    }
+  }, [question, report]);
 
   /** 성적표(단일) + 조합. 조합은 그릴 선이 없어 마커만 찍힌다. */
   const allSignals = useMemo(
@@ -329,9 +354,7 @@ export default function CyclePage() {
             ? "과거 사이클 분석 중…"
             : busy === "fallback"
               ? "시세 직접 받아오는 중…"
-              : busy === "ask"
-                ? "다시 묻는 중…"
-                : "상승장 지표 찾기"}
+              : "상승장 지표 찾기"}
         </button>
       </div>
 
@@ -339,31 +362,53 @@ export default function CyclePage() {
         <div className="mt-6 space-y-4">
           {/* AI 요약 */}
           <section className="rounded-2xl border border-blue-500/30 bg-blue-500/5 p-4">
-            <h2 className="text-sm font-semibold">AI 요약</h2>
+            <div className="flex items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold">AI 요약</h2>
+              <span className="text-[10px] text-muted">
+                {payload.model ? `Gemini ${payload.model}` : "AI 없이 계산 결과만"}
+              </span>
+            </div>
             <p className="mt-2 text-sm leading-relaxed">{payload.reply}</p>
+            {qa ? (
+              <div className="mt-3 rounded-xl border border-border bg-bg px-3 py-2.5">
+                <p className="text-[11px] text-muted">Q. {qa.q}</p>
+                <p className="mt-1 text-sm leading-relaxed">{qa.a}</p>
+                {qa.model ? (
+                  <p className="mt-1.5 text-[10px] text-muted">Gemini {qa.model}</p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {askError ? (
+              <p className="mt-2 rounded-xl border border-down/40 bg-down/10 px-3 py-2 text-[11px] text-down">
+                {askError}
+              </p>
+            ) : null}
+
             <form
               className="mt-3 flex gap-2"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (!question.trim()) return;
-                void run(report.ticker, { question: question.trim() });
-                setQuestion("");
+                void ask();
               }}
             >
               <input
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
-                placeholder="예: 지금 사도 되는 자리야?"
+                placeholder="예: 지금 켜진 A등급 신호가 뭐야?"
                 className="min-w-0 flex-1 rounded-xl border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-muted"
               />
               <button
                 type="submit"
-                disabled={busy !== null || !question.trim()}
+                disabled={asking || !question.trim()}
                 className="shrink-0 rounded-xl bg-blue-500 px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
               >
-                물어보기
+                {asking ? "…" : "물어보기"}
               </button>
             </form>
+            <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
+              이 화면에 이미 계산된 숫자만 보고 답합니다. 종목을 다시 분석하지 않습니다.
+            </p>
           </section>
 
           {/* 현재 상태 */}
@@ -463,7 +508,7 @@ export default function CyclePage() {
                             ? "—"
                             : `${s.medianCaptureSharePct.toFixed(0)}%`}
                         </span>
-                        <span className={chanceTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
+                        <span className={qTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
                       </span>
                     </button>
                   </li>
@@ -554,7 +599,7 @@ export default function CyclePage() {
                     <option value="">지표 없음 (캔들만)</option>
                     {report.combos.length ? (
                       <optgroup label="조합 (둘 다 켜짐)">
-                        {report.combos.slice(0, 10).map((sig) => (
+                        {report.combos.map((sig) => (
                           <option key={sig.key} value={sig.key}>
                             {sig.currentlyOn ? "● " : "○ "}[{sig.grade}] {sig.label} ·{" "}
                             {sig.hitCount}/{report.cycles.length}
@@ -758,7 +803,7 @@ export default function CyclePage() {
                             ? "—"
                             : `${s.medianCaptureSharePct.toFixed(0)}%`}
                         </span>
-                        <span className={chanceTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
+                        <span className={qTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
                       </span>
                     </button>
                   </li>

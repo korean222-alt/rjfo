@@ -17,6 +17,8 @@ export type CyclePayload = {
   series: Bar[];
   reply: string;
   fallbackText: string;
+  /** 요약을 만든 Gemini 모델. 키가 없거나 실패해서 템플릿 문장을 쓰면 null. */
+  model?: string | null;
 };
 
 export type CycleRequest = {
@@ -25,6 +27,31 @@ export type CycleRequest = {
   bullPct?: number;
   question?: string;
 };
+
+export type CycleAnswer = { answer: string; model: string | null };
+
+/**
+ * 이미 받아둔 리포트에 대해 후속 질문.
+ *
+ * 시세를 다시 받지도, 지표를 다시 채점하지도 않는다. 화면이 들고 있는 FACTS만
+ * 서버로 보내 Gemini에게 질문을 시킨다 (지표 재검색이 아니라 진짜 질의응답).
+ */
+export async function askCycle(question: string, facts: string): Promise<CycleAnswer> {
+  const res = await fetch("/api/cycle/ask", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, facts }),
+  });
+  const text = await res.text();
+  let body: { answer?: string; model?: string; error?: string } = {};
+  try {
+    body = JSON.parse(text) as typeof body;
+  } catch {
+    throw new Error(`AI 서버 오류 (HTTP ${res.status}).`);
+  }
+  if (!res.ok || !body.answer) throw new Error(body.error ?? "답변을 받지 못했습니다.");
+  return { answer: body.answer, model: body.model ?? null };
+}
 
 const longBars = new Map<string, Bar[]>();
 

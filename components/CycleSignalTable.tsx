@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { GradeBadge, TimingChip, chancePct, chanceTone, leadText } from "@/components/SignalMeta";
+import { GradeBadge, TimingChip, chancePct, chanceTone, leadText, qTone } from "@/components/SignalMeta";
 import { HORIZON_LABELS, HORIZONS, SIGNAL_GROUPS } from "@/lib/cycle";
 import type { CycleReport, GradedSignal } from "@/lib/cycle";
 
@@ -184,7 +184,7 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                   </span>
                   <span className={toneFor(s.edge)}>기저대비 {signed(s.edge, 0, "%p")}</span>
                   <span className={chanceText(s.chance).tone}>{chanceText(s.chance).text}</span>
-                  <span className={chanceTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
+                  <span className={qTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
                 </div>
               </button>
 

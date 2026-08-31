@@ -743,6 +743,34 @@ console.log("\n[12] 매수 등급 / q값 / 조합");
     report.signals.every((s) => s.checks.length === 6),
     "모든 지표에 관문 6개가 채점되어 있다",
   );
+  // 조합을 차트에서 고를 수 있어야 한다 = 그림이 나와야 한다.
+  const noPlot: string[] = [];
+  const noRule: string[] = [];
+  for (const c of report.combos) {
+    const plot = plotForSignal(c.key, bars);
+    const lines = [...plot.overlays, ...(plot.panes ?? (plot.pane ? [plot.pane] : [])).flatMap((p) => p.lines)];
+    if (!lines.some((l) => l.data.length)) noPlot.push(c.key);
+    if (!plot.rule) noRule.push(c.key);
+  }
+  assert(noPlot.length === 0, `모든 조합에 그릴 선이 있다 (빈 것: ${noPlot.join(", ") || "없음"})`);
+  assert(noRule.length === 0, `모든 조합에 켜짐 조건 설명이 있다 (빠짐: ${noRule.join(", ") || "없음"})`);
+  const twoPane = report.combos.find((c) => {
+    const p = plotForSignal(c.key, bars);
+    return (p.panes ?? []).length === 2;
+  });
+  assert(
+    twoPane == null ||
+      plotForSignal(twoPane.key, bars).panes!.every((p) => p.lines.some((l) => l.data.length)),
+    "패널이 둘인 조합도 양쪽 다 값이 있다",
+  );
+  // 주봉 화면에서도 조합 그림이 나와야 한다 (지표 하나짜리와 같은 경로).
+  const anyCombo = report.combos[0];
+  if (anyCombo) {
+    const weekly = plotForView(anyCombo.key, bars, "1w");
+    const wLines = [...weekly.overlays, ...(weekly.panes ?? []).flatMap((p) => p.lines)];
+    assert(wLines.some((l) => l.data.length), "주봉 화면에서도 조합 그림이 나온다");
+  }
+
   const rsiM = report.signals.find((s) => s.key === "rsi_m50");
   assert(rsiM != null, "월봉 RSI 50 지표가 배터리에 있다");
   assert(rsiM?.timeframe === "월봉", "월봉 RSI는 월봉 지표");

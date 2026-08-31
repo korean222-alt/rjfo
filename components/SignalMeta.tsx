@@ -23,6 +23,19 @@ export function chancePct(p: number | null | undefined): string {
   return `${pct < 10 ? pct.toFixed(1) : pct.toFixed(0)}%`;
 }
 
+/**
+ * 보정 후 확률(q값)은 등급 관문이 10% 미만을 요구한다.
+ * 우연일 확률(20% 미만 초록)과 같은 색 규칙을 쓰면 "초록불인데 관문 탈락"이 되어
+ * 화면이 서로 다른 말을 한다. q값만 관문 기준으로 칠한다.
+ */
+export function qTone(q: number | null | undefined): string {
+  if (q == null || !Number.isFinite(q)) return "text-muted";
+  if (q < 0.05) return "font-semibold text-up";
+  if (q < 0.1) return "text-up";
+  if (q < 0.2) return "text-amber-300";
+  return "text-down";
+}
+
 const GRADE_STYLE: Record<Grade, string> = {
   A: "border-up/60 bg-up/15 text-up",
   B: "border-sky-500/50 bg-sky-500/10 text-sky-300",
