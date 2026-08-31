@@ -167,7 +167,7 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                     {s.timeframe}
                   </span>
                   <span className="shrink-0 text-sm font-bold">
-                    {s.hitCount}/{report.cycles.length}
+                    {s.hitCount}/{s.coverage.cyclesCovered}
                   </span>
                 </div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-4 text-[11px] text-muted">
@@ -255,13 +255,21 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                             : ""}
                     </p>
                     <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-                      과거 상승장 시작 {report.cycles.length}번 중{" "}
+                      과거 상승장 시작 {s.coverage.cyclesCovered}번 중{" "}
                       <b className="text-white">{s.hitCount}번</b>을 새로 켜지면서 잡았습니다 (적중률{" "}
                       {num(s.hitRate, 0, "%")}).
                       {s.alreadyOnCount
                         ? ` 그 밖에 ${s.alreadyOnCount}번은 창 안에 새 신호가 없었고 바닥 당시 이미 켜져 있기만 했습니다 — 적중으로 세지 않았습니다.`
                         : ""}
                     </p>
+                    {s.coverage.full ? null : (
+                      <p className="mt-1.5 text-[11px] leading-relaxed text-amber-300/80">
+                        이 지표는 {s.coverage.fromDate}부터만 값이 있습니다. 전체 사이클{" "}
+                        {s.coverage.cyclesTotal}번 중 {s.coverage.cyclesCovered}번만 채점했고,
+                        적중률·우연대비의 분모도 그 구간으로 좁혀 잡았습니다 — 안 그러면 데이터가 없다는
+                        이유로 적중률이 깎이고 우연대비는 부풀려집니다. 표본이 얇다는 사실은 그대로입니다.
+                      </p>
+                    )}
                   </div>
 
                   {s.walkForward ? (

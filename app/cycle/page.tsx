@@ -6,6 +6,7 @@ import BtcSpotHeader from "@/components/BtcSpotHeader";
 import CycleSignalTable from "@/components/CycleSignalTable";
 import { GradeBadge, TimingChip, chancePct, chanceTone, leadText, qTone } from "@/components/SignalMeta";
 import NavTabs from "@/components/NavTabs";
+import PositionPanel from "@/components/PositionPanel";
 import TickerInput from "@/components/TickerInput";
 import TimeframeSelect from "@/components/TimeframeSelect";
 import { SIGNAL_GROUPS, completedStarts, factsForLlm, snapshotOnPct } from "@/lib/cycle";
@@ -488,6 +489,15 @@ export default function CyclePage() {
             ) : null}
           </section>
 
+          {/* 지금 위치 — 등급표가 답하지 못하는 "이미 많이 오른 상태인가"를 잰다 */}
+          {report.position ? (
+            <PositionPanel
+              position={report.position}
+              bearPct={report.thresholds.bearPct}
+              windowAfter={report.window.after}
+            />
+          ) : null}
+
           {/* 매수 근거가 있는 신호 */}
           <section className="rounded-2xl border border-up/30 bg-up/5 p-4">
             <div className="flex items-baseline justify-between gap-2">
@@ -541,7 +551,7 @@ export default function CyclePage() {
                       <span className="mt-0.5 flex flex-wrap items-center gap-x-3 pl-4 text-[11px] text-muted">
                         <TimingChip timing={s.timing} />
                         <span>
-                          적중 {s.hitCount}/{report.cycles.length}
+                          적중 {s.hitCount}/{s.coverage.cyclesCovered}
                         </span>
                         <span>리드 {leadText(s.medianLeadDays)}</span>
                         <span>
@@ -551,6 +561,12 @@ export default function CyclePage() {
                             : `${s.medianCaptureSharePct.toFixed(0)}%`}
                         </span>
                         <span className={qTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
+                        {s.coverage.full ? null : (
+                          <span className="text-amber-300">
+                            {s.coverage.fromDate}부터만 채점 ({s.coverage.cyclesCovered}/
+                            {report.cycles.length}사이클)
+                          </span>
+                        )}
                       </span>
                     </button>
                   </li>
@@ -661,7 +677,7 @@ export default function CyclePage() {
                         {report.combos.map((sig) => (
                           <option key={sig.key} value={sig.key}>
                             {sig.currentlyOn ? "● " : "○ "}[{sig.grade}] {sig.label} ·{" "}
-                            {sig.hitCount}/{report.cycles.length}
+                            {sig.hitCount}/{sig.coverage.cyclesCovered}
                           </option>
                         ))}
                       </optgroup>
@@ -674,7 +690,7 @@ export default function CyclePage() {
                           {inGroup.map((sig) => (
                             <option key={sig.key} value={sig.key}>
                               {sig.currentlyOn ? "● " : "○ "}[{sig.grade}] {sig.label} ·{" "}
-                              {sig.hitCount}/{report.cycles.length}
+                              {sig.hitCount}/{sig.coverage.cyclesCovered}
                             </option>
                           ))}
                         </optgroup>
@@ -700,9 +716,12 @@ export default function CyclePage() {
                       {selectedSignal.currentlyOn ? "켜짐" : "꺼짐"}
                     </b>
                     <br />
-                    과거 상승장 시작 {report.cycles.length}번 중{" "}
+                    과거 상승장 시작 {selectedSignal.coverage.cyclesCovered}번 중{" "}
                     <b className="text-white">{selectedSignal.hitCount}번</b> 적중(
                     {selectedSignal.hitRate == null ? "—" : `${selectedSignal.hitRate.toFixed(0)}%`})
+                    {selectedSignal.coverage.full
+                      ? ""
+                      : ` · 이 지표는 ${selectedSignal.coverage.fromDate}부터만 값이 있어 ${report.cycles.length}번 중 ${selectedSignal.coverage.cyclesCovered}번만 채점했습니다`}
                     {selectedSignal.alreadyOnCount
                       ? ` · 이미 켜짐 ${selectedSignal.alreadyOnCount}회(적중 아님)`
                       : ""}{" "}
@@ -783,7 +802,7 @@ export default function CyclePage() {
                           />
                           <span className="min-w-0 flex-1 truncate">{s.label}</span>
                           <span className="shrink-0 text-sm font-bold">
-                            {s.hitCount}/{report.cycles.length}
+                            {s.hitCount}/{s.coverage.cyclesCovered}
                           </span>
                           <span className="shrink-0 text-[11px] text-muted">
                             {s.currentlyOn ? "켜짐" : "꺼짐"}
@@ -852,7 +871,7 @@ export default function CyclePage() {
                       <span className="mt-1 flex flex-wrap items-center gap-x-3 pl-4 text-[11px] text-muted">
                         <TimingChip timing={s.timing} />
                         <span>
-                          적중 {s.hitCount}/{report.cycles.length}
+                          적중 {s.hitCount}/{s.coverage.cyclesCovered}
                         </span>
                         <span>신호 {s.eventCount}회</span>
                         <span>리드 {leadText(s.medianLeadDays)}</span>

@@ -27,7 +27,10 @@ export type GradeHit = {
   daysSince: number;
   passCount: number;
   hitCount: number;
+  /** 적중률의 분모 = 이 지표로 채점할 수 있었던 사이클 수. */
   cycles: number;
+  /** 값이 있는 기간이 짧아 일부 사이클만 채점했으면 그 시작일. 전 기간이면 null. */
+  partialFrom: string | null;
   lift: number | null;
   qValue: number | null;
   captureSharePct: number | null;
@@ -51,7 +54,9 @@ function toHit(s: GradedSignal, cycles: number): GradeHit | null {
     daysSince: s.daysSinceLastEvent,
     passCount: s.passCount,
     hitCount: s.hitCount,
-    cycles,
+    // 데이터가 없어 못 본 옛날 바닥을 분모에 넣으면 알림이 지표를 실제보다 나쁘게 적는다.
+    cycles: s.coverage.cyclesCovered,
+    partialFrom: s.coverage.full ? null : s.coverage.fromDate,
     lift: s.lift,
     qValue: s.qValue,
     captureSharePct: s.medianCaptureSharePct,
@@ -112,7 +117,9 @@ export function formatGradeAlert(ticker: string, report: CycleReport, hits: Grad
         ` · 여섯 관문 ${h.passCount}/6`,
     );
     lines.push(
-      `  과거 상승장 시작 ${h.cycles}번 중 ${h.hitCount}번 · ` +
+      `  과거 상승장 시작 ${h.cycles}번 중 ${h.hitCount}번` +
+        (h.partialFrom ? ` (${h.partialFrom}부터만 값이 있어 그만큼만 채점)` : "") +
+        ` · ` +
         `우연대비 ${h.lift == null ? "—" : `${h.lift.toFixed(1)}배`} · ` +
         `보정확률 ${h.qValue == null ? "—" : pct(h.qValue * 100)}`,
     );

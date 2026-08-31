@@ -281,6 +281,86 @@ export function buildSignals(bars: EnrichedBar[]): SignalSeries[] {
     ),
   );
 
+  // ── 펀딩비 (코인만) ───────────────────────────────────────────────
+  //
+  // 무기한선물에는 만기가 없어서, 선물 가격을 현물에 붙들어 두려고 8시간마다 한쪽이
+  // 다른 쪽에 수수료를 낸다. 양수면 롱이 숏에게 낸다(= 롱 쏠림), 음수면 그 반대다.
+  // 그래서 펀딩비는 '지금 어느 쪽에 레버리지가 쌓여 있나'를 값으로 읽는 유일한 공짜 지표다.
+  //
+  // 여기서는 그걸 바닥권 신호로만 쓴다. 숏이 돈을 내면서까지 버티는 구간, 그리고 그
+  // 쏠림이 씻긴 직후가 과거 바닥과 겹쳤는지를 채점기에 맡긴다. 맞는지 아닌지는
+  // 우리가 정하지 않는다 — 여섯 관문이 정한다.
+  //
+  // 주의: 펀딩비는 무료 소스로 2019-09부터만 있다. 그 앞은 값이 없어(null) 채점에서
+  // 통째로 빠진다. evaluate.ts의 Coverage가 분모를 그 구간으로 좁혀 주므로 우연대비가
+  // 부풀려지지는 않지만, 사이클 두어 번으로만 채점된 등급이라는 사실은 화면에 따로 적는다.
+  const fundPct = bars.map((b) => b.funding_pct);
+  const fundZ = bars.map((b) => b.funding_zscore_60d);
+
+  // 7일 평균. 하루치 펀딩은 너무 튀어서 그날 하루만 보고 상태를 정하면 깜빡인다.
+  const fund7: (number | null)[] = new Array(n).fill(null);
+  for (let i = 6; i < n; i++) {
+    let sum = 0;
+    let ok = true;
+    for (let k = i - 6; k <= i; k++) {
+      const v = fundPct[k];
+      if (v == null || !Number.isFinite(v)) {
+        ok = false;
+        break;
+      }
+      sum += v;
+    }
+    if (ok) fund7[i] = sum / 7;
+  }
+
+  push(
+    {
+      key: "fund_neg",
+      label: "펀딩비 음수 (7일)",
+      group: "수급",
+      why: "숏이 롱에게 수수료를 내면서까지 버티는 구간 — 하락 쏠림이 극에 달한 자리",
+      timeframe: "일봉",
+    },
+    fund7.map((v) => (v == null ? null : v < 0)),
+  );
+
+  push(
+    {
+      key: "fund_washed",
+      label: "펀딩 과열 해소",
+      group: "수급",
+      why: "펀딩이 최근 60일 평균보다 1표준편차 아래 — 쌓여 있던 롱 레버리지가 씻겼다",
+      timeframe: "일봉",
+    },
+    fundZ.map((v) => (v == null ? null : v <= -1)),
+  );
+
+  // 씻긴 뒤 정상으로 돌아온 상태. RSI 과매도 탈출과 같은 모양이다.
+  const fundReset: (boolean | null)[] = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    const cur = fundZ[i];
+    if (cur == null) continue;
+    let washed = false;
+    for (let k = Math.max(0, i - 60); k <= i; k++) {
+      const v = fundZ[k];
+      if (v != null && v <= -1) {
+        washed = true;
+        break;
+      }
+    }
+    fundReset[i] = washed && cur > 0;
+  }
+  push(
+    {
+      key: "fund_reset",
+      label: "펀딩 정상화",
+      group: "수급",
+      why: "과열이 씻긴 뒤(60일 안 z≤−1) 펀딩이 다시 평균 위로 — 레버리지 청소 후 재진입",
+      timeframe: "일봉",
+    },
+    fundReset,
+  );
+
   // ── 가격 구조 ────────────────────────────────────────────────────
   const high52 = rollingMax(highs, 252);
   const low52 = rollingMin(lows, 252);
