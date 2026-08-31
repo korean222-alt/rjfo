@@ -93,6 +93,13 @@ export type CycleReport = {
   commonKeys: string[];
   now: { date: string; on: number; total: number };
   /**
+   * 펀딩비가 실제로 몇 일치 붙었는지. 코인만.
+   *
+   * 펀딩 지표 3개가 성적표에 없을 때, 소스가 막힌 건지 원래 이 종목이 대상이 아닌지를
+   * 화면에서 바로 구분하려고 싣는다. days=0이면 지표가 안 만들어진 게 정상이다.
+   */
+  funding: { days: number; first: string | null; last: string | null; signals: number };
+  /**
    * 지금이 사이클의 어디쯤인지, 켜진 지표가 켜진 지 얼마나 됐는지, 그 지표가 꺼질 때까지
    * 기다리면 얼마를 반납하게 되는지.
    *
@@ -176,6 +183,14 @@ export function analyzeCycle(
 
   const lastIdx = bars.length - 1;
   const nowCount = onCountAt(signals, lastIdx);
+
+  const fundingDays = bars.filter((b) => b.funding_pct != null);
+  const funding = {
+    days: fundingDays.length,
+    first: fundingDays[0]?.date ?? null,
+    last: fundingDays[fundingDays.length - 1]?.date ?? null,
+    signals: signals.filter((s) => s.key.startsWith("fund_")).length,
+  };
 
   // '지금 위치'는 등급이 매겨진 것들만 본다. 조합은 구성 지표에서 상태를 되만든다
   // (buildCombos는 채점 결과만 돌려주고 상태 배열은 안 남긴다).
@@ -327,6 +342,7 @@ export function analyzeCycle(
     combos,
     commonKeys,
     now: { date: bars[lastIdx]?.date ?? "", on: nowCount.on, total: nowCount.total },
+    funding,
     position,
     cycleStarts,
     reliability,

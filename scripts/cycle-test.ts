@@ -1126,6 +1126,21 @@ console.log("\n[16] 펀딩비 지표 · 부분 히스토리 채점");
     report.commonKeys.every((k) => !k.startsWith("fund_")),
     "부분 커버리지 지표는 '전 사이클 적중'에 들어가지 않는다",
   );
+
+  // 펀딩비가 몇 일치 붙었는지 리포트가 그대로 들고 있어야 화면에서 원인을 구분할 수 있다.
+  assert(report.funding.days > 0, `리포트에 펀딩 일수가 실린다 (${report.funding.days}일)`);
+  assert(report.funding.signals === 3, `리포트에 펀딩 지표 수가 실린다 (${report.funding.signals}개)`);
+  assert(
+    report.funding.first != null && report.funding.last != null,
+    "펀딩 시작·끝 날짜가 실린다",
+  );
+
+  // 펀딩이 아예 없는 시세면 0으로 나와야 한다 ('소스가 막힌 것'과 '원래 없는 것'을 구분하는 근거).
+  const noFunding = analyzeCycle("BTC-USD", bars);
+  assert(
+    noFunding.funding.days === 0 && noFunding.funding.signals === 0,
+    "펀딩이 없으면 0/0으로 실린다",
+  );
 }
 
 // ── 17. 실데이터 (인자로 티커를 주면) ─────────────────────────────

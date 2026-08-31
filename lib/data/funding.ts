@@ -208,6 +208,62 @@ export async function attachFunding(ticker: string, bars: Bar[]): Promise<Bar[]>
   }
 }
 
+export type FundingProbe = {
+  source: string;
+  ok: boolean;
+  ms: number;
+  /** 날짜로 묶은 뒤의 일수. 이게 사이클을 몇 번 덮느냐가 채점 가능 여부를 정한다. */
+  days: number;
+  first: string | null;
+  last: string | null;
+  error?: string;
+};
+
+/**
+ * 소스별로 실제 뭘 돌려주는지 그대로 본다. 캐시를 타지 않는다.
+ *
+ * 배포하면 거래소가 서버 IP를 막는 일이 흔한데(특히 미국 리전), 화면에는 그냥
+ * '펀딩 지표 없음'으로만 보여서 원인을 알 수가 없다. /api/diag에서 이걸 부른다.
+ */
+export async function probeFundingSources(ticker: string): Promise<FundingProbe[]> {
+  const inst = INST[ticker];
+  if (!inst) return [];
+
+  const attempts: Array<[string, () => Promise<Point[]>]> = [
+    ["binance", () => fromBinance(inst.binance)],
+    ["mexc", () => fromMexc(inst.mexc)],
+    ["okx", () => fromOkx(inst.okx)],
+  ];
+
+  const out: FundingProbe[] = [];
+  for (const [name, run] of attempts) {
+    const started = Date.now();
+    try {
+      const daily = toDailyFunding(await run());
+      const dates = [...daily.keys()].sort();
+      out.push({
+        source: name,
+        ok: daily.size > 0,
+        ms: Date.now() - started,
+        days: daily.size,
+        first: dates[0] ?? null,
+        last: dates[dates.length - 1] ?? null,
+      });
+    } catch (e) {
+      out.push({
+        source: name,
+        ok: false,
+        ms: Date.now() - started,
+        days: 0,
+        first: null,
+        last: null,
+        error: (e as Error).message,
+      });
+    }
+  }
+  return out;
+}
+
 export function fundingCoverage(bars: Bar[]): { days: number; first: string | null; last: string | null } {
   const have = bars.filter((b) => b.funding != null);
   return {
