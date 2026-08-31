@@ -9,6 +9,7 @@
  * 다른 구현으로 다시 짜면 "차트에선 선 위인데 신호는 안 떴다" 같은 어긋남이 생긴다.
  */
 
+import { COMBO_PREFIX } from "./combos";
 import type { EnrichedBar } from "@/types";
 import { enrich } from "@/lib/indicators";
 import {
@@ -37,14 +38,54 @@ export type PlotLine = {
 
 export type PlotLevel = { value: number; label: string };
 
+export type PlotPane = { title: string; lines: PlotLine[]; levels: PlotLevel[] };
+
 export type SignalPlot = {
   /** 캔들 차트 위에 겹칠 선. */
   overlays: PlotLine[];
   /** 가격과 단위가 달라 따로 그려야 하는 지표 (MACD, RSI 등). */
-  pane: { title: string; lines: PlotLine[]; levels: PlotLevel[] } | null;
+  pane: PlotPane | null;
+  /**
+   * 패널이 둘 이상일 때 (조합 신호: "주봉 MACD + 상승 거래량 우위"처럼
+   * 단위가 다른 지표 두 개를 동시에 봐야 한다). 비어 있으면 pane 하나만 그린다.
+   */
+  panes?: PlotPane[];
   /** 무엇이 켜짐 조건인지 사람 말로. 차트 아래 캡션. */
   rule: string;
 };
+
+/**
+ * 조합 신호의 그림 = 구성 지표 둘의 그림을 겹친 것.
+ *
+ * 오버레이는 그냥 합치고, 별도 패널은 둘 다 남긴다(MACD와 RSI를 한 축에 그리면
+ * 둘 다 못 읽는다). 같은 선이 두 번 그려지지 않게 라벨로 한 번 거른다.
+ */
+export function mergePlots(a: SignalPlot, b: SignalPlot): SignalPlot {
+  const seen = new Set<string>();
+  const overlays = [...a.overlays, ...b.overlays].filter((l) => {
+    if (seen.has(l.label)) return false;
+    seen.add(l.label);
+    return true;
+  });
+  const panes = [...(a.panes ?? (a.pane ? [a.pane] : [])), ...(b.panes ?? (b.pane ? [b.pane] : []))];
+  const uniquePanes = panes.filter((p, i) => panes.findIndex((q) => q.title === p.title) === i);
+  return {
+    overlays,
+    pane: uniquePanes[0] ?? null,
+    panes: uniquePanes,
+    rule:
+      a.rule && b.rule
+        ? `둘 다 켜져 있어야 켜짐 — ① ${a.rule} ② ${b.rule}`
+        : a.rule || b.rule || "둘 다 켜져 있으면 켜짐",
+  };
+}
+
+/** "combo:ma365+macd_w" → ["ma365", "macd_w"]. 조합이 아니면 null. */
+function comboMembers(key: string): [string, string] | null {
+  if (!key.startsWith(COMBO_PREFIX)) return null;
+  const parts = key.slice(COMBO_PREFIX.length).split("+");
+  return parts.length === 2 ? [parts[0], parts[1]] : null;
+}
 
 const C = {
   amber: "#f59e0b",
@@ -251,6 +292,20 @@ function build(key: string, ctx: Ctx): SignalPlot {
       };
     }
 
+    case "rsi_m50": {
+      const mo = toMonthly(bars);
+      const r = rsi(mo.bars.map((b) => b.close));
+      return {
+        overlays: [],
+        pane: {
+          title: "월봉 RSI (14)",
+          lines: [periodLine(bars, mo.periodOf, r, "월봉 RSI", C.sky, { width: 2 })],
+          levels: [{ value: 50, label: "50" }],
+        },
+        rule: "월봉 RSI가 50 위면 켜짐 (그 달이 마감된 뒤 반영)",
+      };
+    }
+
     // ── 기타 오실레이터 ─────────────────────────────────────────
     case "stoch": {
       const st = stochastic(bars);
@@ -398,6 +453,10 @@ function build(key: string, ctx: Ctx): SignalPlot {
 
 /** 지표 하나의 그림. bars는 원본 일봉(OHLCV). */
 export function plotForSignal(key: string, bars: EnrichedBar[]): SignalPlot {
+  const members = comboMembers(key);
+  if (members) {
+    return mergePlots(plotForSignal(members[0], bars), plotForSignal(members[1], bars));
+  }
   return build(key, {
     bars,
     closes: bars.map((b) => b.close),
@@ -418,6 +477,7 @@ const VIEW_ALIAS: Record<string, string> = {
   macd_w: "macd_d",
   macd_m: "macd_d",
   rsi_w50: "rsi_d50",
+  rsi_m50: "rsi_d50",
 };
 
 /**
@@ -426,6 +486,13 @@ const VIEW_ALIAS: Record<string, string> = {
  */
 export function plotForView(key: string, dailyBars: EnrichedBar[], tf: ChartTf): SignalPlot {
   if (tf === "1d") return plotForSignal(key, dailyBars);
+  const members = comboMembers(key);
+  if (members) {
+    return mergePlots(
+      plotForView(members[0], dailyBars, tf),
+      plotForView(members[1], dailyBars, tf),
+    );
+  }
   const period = tf === "1w" ? toWeekly(dailyBars) : toMonthly(dailyBars);
   const bars = enrich(period.bars);
   const nativeKey = VIEW_ALIAS[key] ?? key;

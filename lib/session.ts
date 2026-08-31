@@ -131,10 +131,16 @@ export function loadOverlayPeriods(): number[] {
 // ── 상승장 지표 탭 ──────────────────────────────────────────────────
 // 리포트는 지표 30개 × 사이클별 상세라 payload가 작지 않다. 탭을 오갈 때
 // 매번 20년치를 다시 받지 않도록 sessionStorage에 들고 있는다 (일봉 자체는 넣지 않는다).
-const CYCLE_KEY = "volume-analyzer:cycle";
+//
+// 키에 버전을 붙인다: 채점 규칙이 바뀌면(적중 정의, 우연일 확률 계산 등) 예전에 저장된
+// 리포트는 새 화면이 기대하는 필드가 없어 숫자가 비거나 옛 기준으로 잘못 읽힌다.
+// 버전을 올리면 그냥 다시 분석한다.
+const CYCLE_KEY = "volume-analyzer:cycle:v3";
+const CYCLE_KEYS_OLD = ["volume-analyzer:cycle", "volume-analyzer:cycle:v2"];
 
 export function saveCycle(payload: unknown): void {
   try {
+    for (const k of CYCLE_KEYS_OLD) sessionStorage.removeItem(k);
     sessionStorage.setItem(CYCLE_KEY, JSON.stringify(payload));
   } catch {
     // 용량 초과 등은 무시 — 없으면 다시 분석할 뿐이다.
@@ -143,6 +149,7 @@ export function saveCycle(payload: unknown): void {
 
 export function loadCycle<T>(): T | null {
   try {
+    for (const k of CYCLE_KEYS_OLD) sessionStorage.removeItem(k);
     const raw = sessionStorage.getItem(CYCLE_KEY);
     return raw ? (JSON.parse(raw) as T) : null;
   } catch {
@@ -152,6 +159,7 @@ export function loadCycle<T>(): T | null {
 
 export function clearCycle(): void {
   try {
+    for (const k of CYCLE_KEYS_OLD) sessionStorage.removeItem(k);
     sessionStorage.removeItem(CYCLE_KEY);
   } catch {
     // ignore

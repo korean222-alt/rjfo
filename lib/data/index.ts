@@ -2,6 +2,7 @@ import type { Bar } from "@/types";
 import { getCachedBars, setCachedBars } from "./cache";
 import { CryptoExchangeProvider, hasUsableVolume } from "./crypto";
 import { FixtureProvider } from "./fixture";
+import { NaverProvider, isKoreanTicker } from "./naver";
 import { DataProviderError, isCryptoTicker, type DataProvider } from "./provider";
 import { StooqProvider } from "./stooq";
 import { toStooqCryptoSymbol, toTwelveSymbol, tickerFallbacks } from "./symbols";
@@ -53,6 +54,9 @@ export function getProviders(ticker?: string): DataProvider[] {
     case "crypto":
       chain = [new CryptoExchangeProvider()];
       break;
+    case "naver":
+      chain = [new NaverProvider()];
+      break;
     default:
       chain = twelveDataKey() ? [twelve, yahoo, stooq] : [yahoo, stooq];
   }
@@ -62,10 +66,11 @@ export function getProviders(ticker?: string): DataProvider[] {
   if (ticker && isCryptoTicker(ticker) && process.env.DATA_PROVIDER !== "crypto") {
     return [new CryptoExchangeProvider(), ...chain];
   }
-  // 한국 종목은 Twelve Data 무료 플랜에 없다. 키를 써가며 404/플랜 에러를
-  // 맞으면 '티커 없음'으로 오인되어 브라우저 폴백 안내가 꼬인다.
-  if (ticker && /^\d{6}\.(KS|KQ)$/.test(ticker) && process.env.DATA_PROVIDER !== "twelvedata") {
-    return chain.filter((p) => p.name !== "twelvedata");
+  // 한국 종목: Twelve Data 무료 플랜에 KRX가 없고(키를 써가며 404/플랜 에러를 맞으면
+  // '티커 없음'으로 오인된다), Stooq는 한국 주식을 아예 주지 않는다. 남은 Yahoo는
+  // 데이터센터 IP를 429로 막는다. 그래서 네이버 금융을 1순위로 세운다.
+  if (ticker && isKoreanTicker(ticker) && process.env.DATA_PROVIDER === undefined) {
+    return [new NaverProvider(), ...chain.filter((p) => p.name !== "twelvedata")];
   }
   return chain;
 }
@@ -140,6 +145,16 @@ async function fetchFromChain(
 
   const notFound = tickerNotFound(attempts);
   if (notFound) throw new DataProviderError(notFound.message, 404);
+
+  // 한국 종목은 소스가 네이버·Yahoo 둘뿐이다(Stooq·Twelve Data에 KRX가 없다).
+  // 두 곳이 다 막힌 상황에서 "무료 키를 넣으면 해결된다"고 안내하면 거짓말이 된다.
+  if (isKoreanTicker(ticker)) {
+    throw new DataProviderError(
+      `'${ticker}' 한국 종목 시세를 받지 못했습니다 (${detail}) ` +
+        "한국 종목은 네이버·Yahoo 두 곳만 쓸 수 있어, 둘 다 막히면 잠시 후 다시 시도하는 것 말고는 방법이 없습니다.",
+      429,
+    );
+  }
 
   // 키 없는 소스만 있는데 전부 막혔다면, 원인은 이 티커가 아니라 서버 IP 차단이다.
   // 사용자가 할 수 있는 조치를 알려준다.

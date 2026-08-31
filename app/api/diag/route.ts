@@ -1,7 +1,7 @@
 import { json } from "@/lib/json-response";
 import { getProviders } from "@/lib/data";
 import { DataProviderError, isValidTicker, normalizeTicker } from "@/lib/data/provider";
-import { kvConfigured } from "@/lib/kv";
+import { kvConfigured, kvSource } from "@/lib/kv";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,6 +58,8 @@ export async function GET(req: Request) {
       DATA_PROVIDER: process.env.DATA_PROVIDER ?? null,
       DATA_DEADLINE_MS: process.env.DATA_DEADLINE_MS ?? null,
       hasKv: kvConfigured(),
+      // 이름만. 어떤 접두사로 들어와 있는지 이게 없으면 알 수 없다.
+      kvEnvNames: kvSource(),
       hasGeminiKey: Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
       hasTwelveDataKey: Boolean(process.env.TWELVE_DATA_API_KEY),
     },

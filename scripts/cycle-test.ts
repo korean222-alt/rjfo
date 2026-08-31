@@ -7,16 +7,22 @@
  * 정확히 찍는지 본다. 라벨링이 틀리면 나머지 통계는 전부 무의미하다.
  */
 import { enrich } from "../lib/indicators";
-import { analyzeCycle, completedStarts, snapshotOnPct } from "../lib/cycle";
+import { analyzeCycle, completedStarts, snapshotOnPct, type CycleReport } from "../lib/cycle";
+import { findGradeHits, formatGradeAlert } from "../lib/alerts/grade-alert";
 import { findCycles, findPivots, STOCK_THRESHOLDS, CRYPTO_THRESHOLDS } from "../lib/cycle/regime";
 import {
+  circularShiftP,
   eventIndices,
   evaluateSignal,
   exclusiveCycleBounds,
   cycleWindowShare,
+  windowMask,
   DEFAULT_WINDOW,
   baselineStats,
 } from "../lib/cycle/evaluate";
+import { andState } from "../lib/cycle/combos";
+import { MAX_WINDOW_SHARE, resolveWindow } from "../lib/cycle/evaluate";
+import { fdrQValues } from "../lib/cycle/grade";
 import { toMonthly, toWeekly, projectToDaily, barsForView, snapDatesToView } from "../lib/cycle/resample";
 import { ema, macd, rsi, sma } from "../lib/cycle/ta";
 import { narrate } from "../lib/cycle/narrative";
@@ -215,8 +221,16 @@ console.log("\n[6] 전체 파이프라인");
     "적중 횟수는 사이클 수를 넘을 수 없다",
   );
   assert(
-    report.signals.every((s) => s.alreadyOnCount <= s.hitCount),
-    "이미켜짐 횟수는 적중을 넘을 수 없다",
+    report.signals.every((s) => s.hitCount + s.alreadyOnCount <= report.cycles.length),
+    "적중 + 이미켜짐은 사이클 수를 넘을 수 없다",
+  );
+  assert(
+    report.signals.every((s) => s.inWindowEvents.length + s.falseAlarms === s.eventCount),
+    "창 안 신호 + 오탐 = 전체 신호",
+  );
+  assert(
+    report.signals.every((s) => s.cycleHits.filter((h) => h.hit).length === s.hitCount),
+    "적중 횟수 = hit로 표시된 사이클 수",
   );
   assert(
     report.signals.every((s) => s.falseAlarms >= 0),
@@ -528,8 +542,9 @@ console.log("\n[11] 적중 판정 (이미 켜짐, 창 겹침 없음)");
     state: bars.map((_, i) => (i < 5 ? null : true)),
   };
   const always = evaluateSignal(bars, alwaysOn, cycles, baseline, share);
-  assert(always.hitCount === 2, `항상 켜짐은 바닥마다 적중 (실제 ${always.hitCount})`);
-  assert(always.alreadyOnCount === 2, `둘 다 이미 켜짐 (실제 ${always.alreadyOnCount})`);
+  assert(always.hitCount === 0, `항상 켜짐은 적중이 아니다 (실제 ${always.hitCount})`);
+  assert(always.alreadyOnCount === 2, `둘 다 '이미 켜짐'으로만 기록 (실제 ${always.alreadyOnCount})`);
+  assert(always.cycleHits.every((h) => !h.hit), "항상 켜짐은 어떤 사이클도 hit가 아니다");
   assert(always.eventCount === 0, `상승 엣지가 없으면 신호 0회 (실제 ${always.eventCount})`);
   assert(always.score < 50, `항상 켜짐은 순위에서 빠진다 (score ${always.score.toFixed(1)})`);
 
@@ -543,10 +558,25 @@ console.log("\n[11] 적중 판정 (이미 켜짐, 창 겹침 없음)");
     baseline,
     share,
   );
-  assert(early.hitCount >= 1, `창 직전 점등도 1번 사이클 적중 (실제 ${early.hitCount})`);
-  assert(early.cycleHits[0].alreadyOn === true, "1번 사이클은 이미 켜짐으로 적중");
-  assert(early.cycleHits[0].eventDate != null, "이미 켜짐이어도 점등일이 있다");
-  assert(early.falseAlarms === 0, "창 직전 점등은 오탐이 아니다");
+  assert(early.hitCount === 0, `창 밖 점등은 적중이 아니다 (실제 ${early.hitCount})`);
+  assert(early.cycleHits[0].alreadyOn === true, "1번 사이클은 '이미 켜짐'");
+  assert(early.cycleHits[0].hit === false, "'이미 켜짐'은 적중으로 세지 않는다");
+  assert(early.cycleHits[0].eventDate != null, "언제 켜졌는지는 남긴다");
+  assert(early.falseAlarms === 1, `창 밖 점등은 오탐 (실제 ${early.falseAlarms})`);
+
+  // 창 안(바닥 10일 전)에서 켜졌다가 바닥 전에 꺼짐 → 선행 적중이어야 한다.
+  const leadState: (boolean | null)[] = bars.map(() => false);
+  leadState[90] = true;
+  leadState[91] = true;
+  const leadEval = evaluateSignal(
+    bars,
+    { ...alwaysOn, key: "lead", label: "바닥 전 점등", state: leadState },
+    cycles,
+    baseline,
+    share,
+  );
+  assert(leadEval.cycleHits[0].hit === true, "바닥 20일 전 창 안 점등도 적중");
+  assert(leadEval.cycleHits[0].leadDays === -10, `리드 -10일 (실제 ${leadEval.cycleHits[0].leadDays})`);
 
   // 각 바닥 직후에만 짧게 점등. 창이 안 겹치니 신호가 서로 다른 사이클에 귀속.
   const timed: (boolean | null)[] = bars.map(() => false);
@@ -564,12 +594,383 @@ console.log("\n[11] 적중 판정 (이미 켜짐, 창 겹침 없음)");
   assert(timedEval.hitCount === 2, `바닥 직후 점등은 두 사이클 모두 적중 (실제 ${timedEval.hitCount})`);
   assert(timedEval.alreadyOnCount === 0, "바닥 당시에는 꺼져 있었고 직후 켜짐");
   assert(timedEval.falseAlarms === 0, `창 안 신호는 오탐 아님 (실제 ${timedEval.falseAlarms})`);
+
+  // 창 안에서 여러 번 떠도 전부 '맞은 신호'로 센다.
+  //
+  // 예전에는 사이클마다 하나만 세서, 창 안에서 세 번 떠도 두 번이 오탐이 됐다.
+  // 그래서 자주 뜨는 지표는 정확도가 구조적으로 깎이고 우연일 확률이 100%에 붙었다.
+  const many: (boolean | null)[] = bars.map(() => false);
+  for (const i of [110, 130, 150, 170]) {
+    many[i] = true;
+    many[i + 1] = true;
+  }
+  const manyEval = evaluateSignal(
+    bars,
+    { ...alwaysOn, key: "many", label: "창 안 다중 점등", state: many },
+    cycles,
+    baseline,
+    share,
+  );
+  assert(manyEval.eventCount === 4, `신호 4회 (실제 ${manyEval.eventCount})`);
+  assert(
+    manyEval.inWindowEvents.length === 4,
+    `창 안 신호 4회를 전부 센다 (실제 ${manyEval.inWindowEvents.length})`,
+  );
+  assert(manyEval.falseAlarms === 0, `창 안 다중 점등은 오탐 0 (실제 ${manyEval.falseAlarms})`);
+  assert(manyEval.precision === 100, `정확도 100% (실제 ${manyEval.precision})`);
+  assert(manyEval.hitCount === 1, `사이클 적중은 여전히 사이클 단위 (실제 ${manyEval.hitCount})`);
+
+  // 창을 다 피해 다니는 지표는 우연일 확률이 높아야 한다.
+  // 창은 [80,175]와 [230,399]. 그 사이 빈 구간에서만 뜨게 한다.
+  const outside: (boolean | null)[] = bars.map(() => false);
+  for (const i of [10, 30, 50, 190, 200, 210]) {
+    outside[i] = true;
+    outside[i + 1] = true;
+  }
+  const outsideEval = evaluateSignal(
+    bars,
+    { ...alwaysOn, key: "outside", label: "창 밖 점등", state: outside },
+    cycles,
+    baseline,
+    share,
+  );
+  assert(outsideEval.precision === 0, `창 밖만 뜨면 정확도 0% (실제 ${outsideEval.precision})`);
+  assert(
+    outsideEval.chance != null && outsideEval.chance > 0.5,
+    `창 밖 지표는 우연일 확률이 높다 (실제 ${outsideEval.chance})`,
+  );
+  assert(
+    manyEval.chance != null && manyEval.chance < outsideEval.chance!,
+    `창 안 지표가 더 우연 같지 않다 (${manyEval.chance} < ${outsideEval.chance})`,
+  );
+
+  // 순환 이동 검정. 창이 전체의 10%뿐인 마스크로 따로 본다
+  // (위 합성 사이클은 창이 전체의 67%라 무엇을 찍어도 잘 맞는다).
+  const mask = windowMask(
+    [
+      { lo: 100, hi: 150 },
+      { lo: 500, hi: 550 },
+    ],
+    1000,
+  );
+  const clustered = circularShiftP([100, 110, 120, 130], mask);
+  const spread = circularShiftP([0, 250, 500, 750], mask);
+  assert(
+    clustered != null && clustered < 0.1,
+    `창 안에만 네 번 뜨면 우연일 확률이 낮다 (실제 ${clustered})`,
+  );
+  assert(
+    spread != null && clustered != null && clustered < spread,
+    `흩어진 신호보다 우연 같지 않다 (${clustered} < ${spread})`,
+  );
+  assert(circularShiftP([], mask) === null, "신호가 없으면 확률을 못 잰다");
+  const one = circularShiftP([110], mask);
+  assert(
+    one != null && Math.abs(one - 102 / 1000) < 0.01,
+    `신호 1회짜리 확률은 창 비율(10.2%)에 수렴 (실제 ${one})`,
+  );
 }
 
-// ── 12. 실데이터 (인자로 티커를 주면) ─────────────────────────────
+// ── 12. 매수 등급 · 다중검정 보정 · 조합 ──────────────────────────
+console.log("\n[12] 매수 등급 / q값 / 조합");
+{
+  // BH 보정: 손으로 계산해서 대조.
+  const q = fdrQValues([0.01, 0.02, 0.5, null]);
+  approx(q[0], Math.min(0.01 * 3, 0.02 * 3 / 2, 0.5), 1e-12, "q(0.01) = min(0.03, 0.03, 0.5)");
+  approx(q[1], Math.min(0.02 * 3 / 2, 0.5), 1e-12, "q(0.02) = 0.03");
+  approx(q[2], 0.5, 1e-12, "q(0.5) = 0.5");
+  assert(q[3] === null, "p를 못 잰 지표는 q도 없다");
+  const mono = fdrQValues([0.001, 0.9, 0.02]);
+  assert(
+    mono[0]! <= mono[2]! && mono[2]! <= mono[1]!,
+    `q값은 p 순서를 뒤집지 않는다 (${mono.map((v) => v?.toFixed(3)).join(", ")})`,
+  );
+  assert(
+    fdrQValues([0.04]).every((v) => v != null && v >= 0.04),
+    "q값은 항상 p값 이상",
+  );
+
+  // AND 상태: 한쪽이 null이면 결과도 null.
+  const a: (boolean | null)[] = [null, true, true, false, true];
+  const b: (boolean | null)[] = [true, null, true, true, false];
+  const and = andState(a, b);
+  assert(and[0] === null && and[1] === null, "한쪽이라도 값이 없으면 조합도 값 없음");
+  assert(and[2] === true && and[3] === false && and[4] === false, "둘 다 켜져야 켜짐");
+
+  // 실제 파이프라인에서 나온 조합이 정말 두 지표의 AND인지.
+  const closes: number[] = [100];
+  const ramp = (to: number, days: number) => {
+    const from = closes[closes.length - 1];
+    for (let i = 1; i <= days; i++) {
+      closes.push(from * Math.pow(to / from, i / days) * (1 + Math.sin(i * 1.7) * 0.02));
+    }
+  };
+  ramp(1200, 400);
+  ramp(200, 300);
+  ramp(2500, 500);
+  ramp(700, 350);
+  ramp(6000, 600);
+  const bars = enrich(barsFromCloses(closes));
+  const report = analyzeCycle("BTC-USD", bars);
+  const sigs = buildSignals(bars);
+
+  assert(report.combos.length > 0, `조합이 만들어진다 (실제 ${report.combos.length}개)`);
+  let andOk = true;
+  let groupOk = true;
+  for (const c of report.combos) {
+    const a = sigs.find((x) => x.key === c.members[0]);
+    const b = sigs.find((x) => x.key === c.members[1]);
+    if (!a || !b) {
+      andOk = false;
+      continue;
+    }
+    if (a.group === b.group) groupOk = false;
+    if (eventIndices(andState(a.state, b.state)).length !== c.eventCount) andOk = false;
+  }
+  assert(andOk, "조합의 신호 횟수 = 두 지표 AND의 신호 횟수");
+  assert(groupOk, "같은 성격끼리는 조합하지 않는다");
+  assert(
+    report.combos.every((c) => c.label.includes(" + ")),
+    "조합 이름에 구성 지표가 둘 다 들어간다",
+  );
+  assert(
+    report.signals.every((s) => s.qValue == null || s.chance == null || s.qValue >= s.chance),
+    "보정 후 q값은 원래 p값보다 작지 않다",
+  );
+  assert(
+    report.signals.every((s) => (s.grade === "A") === (s.passCount === 6)),
+    "A등급 = 여섯 관문 전부 통과",
+  );
+  assert(
+    report.signals.every((s) => s.checks.length === 6),
+    "모든 지표에 관문 6개가 채점되어 있다",
+  );
+  // 조합을 차트에서 고를 수 있어야 한다 = 그림이 나와야 한다.
+  const noPlot: string[] = [];
+  const noRule: string[] = [];
+  for (const c of report.combos) {
+    const plot = plotForSignal(c.key, bars);
+    const lines = [...plot.overlays, ...(plot.panes ?? (plot.pane ? [plot.pane] : [])).flatMap((p) => p.lines)];
+    if (!lines.some((l) => l.data.length)) noPlot.push(c.key);
+    if (!plot.rule) noRule.push(c.key);
+  }
+  assert(noPlot.length === 0, `모든 조합에 그릴 선이 있다 (빈 것: ${noPlot.join(", ") || "없음"})`);
+  assert(noRule.length === 0, `모든 조합에 켜짐 조건 설명이 있다 (빠짐: ${noRule.join(", ") || "없음"})`);
+  const twoPane = report.combos.find((c) => {
+    const p = plotForSignal(c.key, bars);
+    return (p.panes ?? []).length === 2;
+  });
+  assert(
+    twoPane == null ||
+      plotForSignal(twoPane.key, bars).panes!.every((p) => p.lines.some((l) => l.data.length)),
+    "패널이 둘인 조합도 양쪽 다 값이 있다",
+  );
+  // 주봉 화면에서도 조합 그림이 나와야 한다 (지표 하나짜리와 같은 경로).
+  const anyCombo = report.combos[0];
+  if (anyCombo) {
+    const weekly = plotForView(anyCombo.key, bars, "1w");
+    const wLines = [...weekly.overlays, ...(weekly.panes ?? []).flatMap((p) => p.lines)];
+    assert(wLines.some((l) => l.data.length), "주봉 화면에서도 조합 그림이 나온다");
+  }
+
+  const rsiM = report.signals.find((s) => s.key === "rsi_m50");
+  assert(rsiM != null, "월봉 RSI 50 지표가 배터리에 있다");
+  assert(rsiM?.timeframe === "월봉", "월봉 RSI는 월봉 지표");
+  assert(
+    report.signals.every((s) => s.walkForward == null || s.walkForward.early.to < s.walkForward.late.from),
+    "앞뒤 기간이 겹치지 않는다",
+  );
+  assert(
+    report.signals.every((s) => s.drawdown.worstPct == null || s.drawdown.worstPct <= 0),
+    "낙폭은 0 이하",
+  );
+}
+
+// ── 13. 랜덤워크에서는 매수 등급이 나오면 안 된다 ──────────────────
+//
+// 이 앱에서 제일 무서운 실패는 "아무 정보도 없는 시세인데 A등급이 나오는" 것이다.
+// 그러면 등급은 도장 찍어주는 기계일 뿐이다. 정보가 없는 시계열로 그걸 확인한다.
+console.log("\n[13] 랜덤워크 대조군 (아무 신호도 A가 되면 안 된다)");
+{
+  const mulberry = (seed: number) => () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  for (const seed of [1, 2026]) {
+    const rand = mulberry(seed);
+    const closes = [1000];
+    for (let i = 1; i < 3000; i++) {
+      const z = rand() + rand() + rand() + rand() + rand() + rand() - 3;
+      closes.push(Math.max(1, closes[i - 1] * Math.exp(0.0006 + 0.04 * z)));
+    }
+    const bars = enrich(barsFromCloses(closes));
+    const report = analyzeCycle("BTC-USD", bars);
+    const aGrade = [...report.signals, ...report.combos].filter((s) => s.grade === "A");
+    assert(
+      aGrade.length === 0,
+      `seed ${seed}: 랜덤워크에 A등급 없음 (실제 ${aGrade.length}개: ${aGrade.map((s) => s.label).join(", ")})`,
+    );
+    const q = [...report.signals, ...report.combos].filter((s) => s.qValue != null && s.qValue < 0.1);
+    assert(q.length <= 2, `seed ${seed}: 보정 후 유의한 게 거의 없다 (실제 ${q.length}개)`);
+  }
+}
+
+console.log("\n[14] 창 비율 상한 — 사이클이 잦아도 '시작 부근'이 기간을 삼키지 않는다");
+{
+  // 같은 모양의 사이클을 주기만 바꿔 채운다. 사이클이 잦아지면 창이 겹쳐 커진다.
+  const wave = (period: number, total = 4000): number[] => {
+    const closes = [100];
+    let up = true;
+    let phase = 0;
+    const half = Math.round(period / 2);
+    for (let i = 1; i < total; i++) {
+      const step = up ? Math.pow(1.9, 1 / half) : Math.pow(0.55, 1 / half);
+      closes.push(Math.max(1, closes[i - 1] * step));
+      if (++phase >= half) { phase = 0; up = !up; }
+    }
+    return closes;
+  };
+
+  const dense = enrich(barsFromCloses(wave(300)));
+  const denseReport = analyzeCycle("TEST", dense);
+  assert(
+    denseReport.cycles.length >= 8,
+    `사이클이 잦은 시세: ${denseReport.cycles.length}개 잡힘`,
+  );
+  assert(
+    denseReport.windowSharePct <= MAX_WINDOW_SHARE * 100 + 0.5,
+    `창 비율이 한도 이하 (실제 ${denseReport.windowSharePct.toFixed(0)}%)`,
+  );
+  assert(denseReport.windowShrunk, "한도를 넘겨 창을 줄였다고 표시한다");
+  assert(
+    denseReport.window.after < denseReport.windowRequested.after,
+    `뒤쪽 창이 실제로 줄었다 (${denseReport.windowRequested.after}→${denseReport.window.after})`,
+  );
+
+  // 줄이기 전(요청한 창)이라면 한도를 넘었어야 한다 — 아니면 이 테스트가 무의미하다.
+  const rawShare = cycleWindowShare(dense.length, denseReport.cycles, denseReport.windowRequested);
+  assert(rawShare > MAX_WINDOW_SHARE, `원래 창이면 ${(rawShare * 100).toFixed(0)}%까지 덮었다`);
+
+  // 사이클이 드문 시세는 손대지 않는다.
+  const sparse = enrich(barsFromCloses(wave(1600)));
+  const sparseReport = analyzeCycle("TEST", sparse);
+  assert(!sparseReport.windowShrunk, "창이 좁으면 그대로 둔다");
+  assert(
+    sparseReport.window.after === DEFAULT_WINDOW.after,
+    `기본 창 유지 (실제 ${sparseReport.window.after})`,
+  );
+
+  // resolveWindow 단독: 한도 이하면 요청 그대로, 넘으면 이분탐색으로 맞춘다.
+  const kept = resolveWindow(sparse.length, sparseReport.cycles, DEFAULT_WINDOW);
+  assert(!kept.shrunk && kept.window.after === DEFAULT_WINDOW.after, "한도 이하는 그대로");
+  const cut = resolveWindow(dense.length, denseReport.cycles, DEFAULT_WINDOW);
+  assert(cut.share <= MAX_WINDOW_SHARE + 0.005, `줄인 뒤 비율 ${(cut.share * 100).toFixed(0)}%`);
+  assert(
+    resolveWindow(dense.length, denseReport.cycles, DEFAULT_WINDOW, 1).shrunk === false,
+    "한도를 1로 주면 줄이지 않는다",
+  );
+
+  // 창은 다음 고점을 넘지 않는다 (그 뒤는 이미 하락 국면이다).
+  const bounds = exclusiveCycleBounds(denseReport.cycles, dense.length, denseReport.window);
+  const overPeak = denseReport.cycles.filter(
+    (c, i) => c.nextPeakIdx != null && bounds[i].hi > c.nextPeakIdx,
+  );
+  assert(overPeak.length === 0, `창이 다음 고점을 넘지 않는다 (넘은 사이클 ${overPeak.length}개)`);
+}
+
+console.log("\n[15] A등급 텔레그램 알림 — 무엇을 보내고 무엇을 안 보내나");
+{
+  type Graded = CycleReport["signals"][number];
+
+  const signal = (over: Partial<Graded>): Graded =>
+    ({
+      key: "ma200",
+      label: "200일선 위",
+      group: "추세",
+      why: "",
+      timeframe: "일봉",
+      events: [],
+      eventCount: 5,
+      inWindowEvents: [],
+      cycleHits: [],
+      hitCount: 3,
+      hitRate: 100,
+      alreadyOnCount: 0,
+      medianLeadDays: 12,
+      medianCaptureSharePct: 70,
+      falseAlarms: 1,
+      precision: 80,
+      lift: 2.4,
+      chance: 0.01,
+      forward: {},
+      drawdown: { n: 3, medianPct: -8, worstPct: -21 },
+      edge: 12,
+      timing: "후행",
+      walkForward: null,
+      currentlyOn: true,
+      lastEventDate: "2026-08-31",
+      daysSinceLastEvent: 0,
+      score: 90,
+      qValue: 0.03,
+      grade: "A",
+      checks: [],
+      passCount: 6,
+      ...over,
+    }) as Graded;
+
+  const report = {
+    ticker: "005930.KS",
+    periodEnd: "2026-08-31",
+    cycles: [{}, {}, {}],
+    regime: { phase: "상승" },
+    now: { date: "2026-08-31", on: 18, total: 30 },
+    signals: [
+      signal({}),
+      // 등급이 낮으면 안 보낸다
+      signal({ key: "rsi_d50", label: "RSI 50 위", grade: "B", passCount: 5 }),
+      // A등급이지만 꺼져 있으면 안 보낸다
+      signal({ key: "macd_d", label: "일봉 MACD 골든크로스", currentlyOn: false }),
+      // A등급이고 켜져 있지만 100일 전에 켜진 것 — 새 신호가 아니다
+      signal({ key: "ma365", label: "365일선 위", daysSinceLastEvent: 100, lastEventDate: "2026-04-01" }),
+    ],
+    combos: [
+      signal({
+        key: "combo:off_low_20+rsi_recover",
+        label: "52주 저점 +20% + RSI 과매도 탈출",
+        daysSinceLastEvent: 1,
+        lastEventDate: "2026-08-28",
+      }),
+    ],
+  } as unknown as CycleReport;
+
+  const hits = findGradeHits(report);
+  assert(hits.length === 2, `A등급 + 켜짐 + 새로 켜진 것만 2개 (실제 ${hits.length}: ${hits.map((h) => h.label).join(", ")})`);
+  assert(hits[0].kind === "조합", `조합을 먼저 (실제 ${hits[0].kind})`);
+  assert(hits.every((h) => h.passCount === 6), "여섯 관문 통과만");
+  assert(!hits.some((h) => h.label === "365일선 위"), "오래전에 켜진 신호는 새 알림이 아니다");
+
+  // 같은 점등은 두 번 보내지 않는다 (신호일까지 키에 들어간다).
+  const notified = { [hits[0].dedupeKey]: "2026-08-31" };
+  const again = findGradeHits(report, notified);
+  assert(again.length === 1, `이미 보낸 건 제외 (실제 ${again.length})`);
+  assert(again[0].dedupeKey !== hits[0].dedupeKey, "남은 건 아직 안 보낸 신호");
+
+  const text = formatGradeAlert("005930.KS", report, hits);
+  assert(text.includes("005930.KS"), "본문에 티커");
+  assert(text.includes("52주 저점 +20% + RSI 과매도 탈출"), "본문에 신호 이름");
+  assert(text.includes("여섯 관문 6/6"), "본문에 관문 통과 수");
+  assert(text.includes("과거 패턴이며 투자 판단의 근거가 아닙니다."), "면책 문구");
+  assert(!/undefined|NaN/.test(text), `본문에 undefined/NaN 없음 (${text.slice(0, 80)})`);
+}
+
+// ── 16. 실데이터 (인자로 티커를 주면) ─────────────────────────────
 const ticker = process.argv[2];
 if (ticker) {
-  console.log(`\n[12] 실데이터: ${ticker}`);
+  console.log(`\n[16] 실데이터: ${ticker}`);
   (async () => {
     const { loadBars, MAX_YEARS } = await import("../lib/data");
     const { normalizeTicker } = await import("../lib/data/provider");

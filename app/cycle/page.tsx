@@ -4,10 +4,11 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BtcSpotHeader from "@/components/BtcSpotHeader";
 import CycleSignalTable from "@/components/CycleSignalTable";
+import { GradeBadge, TimingChip, chancePct, chanceTone, leadText, qTone } from "@/components/SignalMeta";
 import NavTabs from "@/components/NavTabs";
 import TickerInput from "@/components/TickerInput";
 import TimeframeSelect from "@/components/TimeframeSelect";
-import { SIGNAL_GROUPS, completedStarts, snapshotOnPct } from "@/lib/cycle";
+import { SIGNAL_GROUPS, completedStarts, factsForLlm, snapshotOnPct } from "@/lib/cycle";
 import { enrichForPlot, plotForView } from "@/lib/cycle/plot";
 import {
   barsForView,
@@ -16,7 +17,7 @@ import {
   snapDatesToView,
   type ChartTf,
 } from "@/lib/cycle/resample";
-import { runCycle, type CyclePayload } from "@/lib/cycle-client";
+import { askCycle, runCycle, type CyclePayload } from "@/lib/cycle-client";
 import { isCryptoTicker, isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import { clearCycle, loadCycle, saveCycle } from "@/lib/session";
 import { toTradingViewSymbol } from "@/lib/tradingview";
@@ -41,7 +42,7 @@ function signed(n: number | null | undefined, digits = 0): string {
 export default function CyclePage() {
   const [ticker, setTicker] = useState("");
   const [payload, setPayload] = useState<CyclePayload | null>(null);
-  const [busy, setBusy] = useState<null | "analyze" | "fallback" | "ask">(null);
+  const [busy, setBusy] = useState<null | "analyze" | "fallback">(null);
   const [error, setError] = useState<string | null>(null);
   const [tickerError, setTickerError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -49,6 +50,10 @@ export default function CyclePage() {
   const [bearPct, setBearPct] = useState<number | null>(null);
   const [bullPct, setBullPct] = useState<number | null>(null);
   const [question, setQuestion] = useState("");
+  /** 후속 질문과 답. 리포트를 다시 계산하지 않고 이 자리에서만 주고받는다. */
+  const [qa, setQa] = useState<{ q: string; a: string; model: string | null } | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
   const [tf, setTf] = useState<ChartTf>("1d");
   const chartRef = useRef<HTMLDivElement>(null);
 
@@ -73,21 +78,20 @@ export default function CyclePage() {
   }, []);
 
   const run = useCallback(
-    async (rawTicker?: string, extra?: { bearPct?: number; bullPct?: number; question?: string }) => {
+    async (rawTicker?: string, extra?: { bearPct?: number; bullPct?: number }) => {
       setError(null);
       setTickerError(null);
       const t = normalizeTicker(rawTicker ?? ticker);
       if (!t) return setTickerError("티커를 입력해 주세요.");
       if (!isValidTicker(t)) return setTickerError("올바른 티커 형식이 아닙니다.");
 
-      setBusy(extra?.question ? "ask" : "analyze");
+      setBusy("analyze");
       try {
         const next = await runCycle(
           {
             ticker: t,
             bearPct: extra?.bearPct ?? bearPct ?? undefined,
             bullPct: extra?.bullPct ?? bullPct ?? undefined,
-            question: extra?.question,
           },
           () => setBusy("fallback"),
         );
@@ -96,6 +100,8 @@ export default function CyclePage() {
         setBearPct(next.report.thresholds.bearPct);
         setBullPct(next.report.thresholds.bullPct);
         setSelectedKey(null);
+        setQa(null);
+        setAskError(null);
         saveCycle(next);
       } catch (e) {
         setError((e as Error).message);
@@ -108,9 +114,35 @@ export default function CyclePage() {
 
   const report = payload?.report ?? null;
 
+  /**
+   * 후속 질문. 분석을 다시 돌리지 않고, 이미 가진 리포트의 FACTS만 보낸다.
+   * (예전에는 여기서 /api/cycle을 통째로 다시 불러서 무엇을 물어도 같은 요약이 나왔다.)
+   */
+  const ask = useCallback(async () => {
+    const q = question.trim();
+    if (!q || !report) return;
+    setAsking(true);
+    setAskError(null);
+    try {
+      const { answer, model } = await askCycle(q, factsForLlm(report));
+      setQa({ q, a: answer, model });
+      setQuestion("");
+    } catch (e) {
+      setAskError((e as Error).message);
+    } finally {
+      setAsking(false);
+    }
+  }, [question, report]);
+
+  /** 성적표(단일) + 조합. 조합은 그릴 선이 없어 마커만 찍힌다. */
+  const allSignals = useMemo(
+    () => (report ? [...report.signals, ...report.combos] : []),
+    [report],
+  );
+
   const selectedSignal = useMemo(
-    () => (report && selectedKey ? report.signals.find((s) => s.key === selectedKey) ?? null : null),
-    [report, selectedKey],
+    () => (selectedKey ? allSignals.find((s) => s.key === selectedKey) ?? null : null),
+    [allSignals, selectedKey],
   );
 
   // 지표 선을 그리려면 파생값(OBV 기울기 등)이 필요하다. 서버 채점과 같은 함수를 쓴다.
@@ -133,13 +165,13 @@ export default function CyclePage() {
   /** 성적표 순위(= 종합 순) 그대로 앞뒤로 넘긴다. */
   const stepSignal = useCallback(
     (delta: number) => {
-      if (!report?.signals.length) return;
-      const list = report.signals;
+      if (!allSignals.length) return;
+      const list = allSignals;
       const at = selectedKey ? list.findIndex((s) => s.key === selectedKey) : -1;
       const next = at < 0 ? (delta > 0 ? 0 : list.length - 1) : (at + delta + list.length) % list.length;
       setSelectedKey(list[next].key);
     },
-    [report, selectedKey],
+    [allSignals, selectedKey],
   );
 
   /**
@@ -151,10 +183,7 @@ export default function CyclePage() {
    */
   const MAX_MARKERS = 60;
   const matchedDates = useMemo(
-    () =>
-      selectedSignal
-        ? selectedSignal.cycleHits.map((h) => h.eventDate).filter((d): d is string => d != null)
-        : [],
+    () => selectedSignal?.inWindowEvents ?? [],
     [selectedSignal],
   );
   const markerDates = useMemo(() => {
@@ -214,6 +243,46 @@ export default function CyclePage() {
   const commonSignals = useMemo(
     () => (report ? report.signals.filter((s) => report.commonKeys.includes(s.key)) : []),
     [report],
+  );
+
+  /**
+   * 매수 근거가 있는 신호 = 여섯 관문을 다 통과한 것(A).
+   * 하나도 없으면 그 사실을 그대로 보여준다. 억지로 순위 1위를 추천하지 않는다.
+   */
+  const buySignals = useMemo(
+    () =>
+      allSignals
+        .filter((s) => s.grade === "A")
+        .sort((a, b) => (a.qValue ?? 1) - (b.qValue ?? 1)),
+    [allSignals],
+  );
+
+  /**
+   * 관문별로 몇 개가 걸렸는지.
+   *
+   * "A등급이 하나도 없다"만 보여주면 사용자는 그게 결론인지 고장인지 알 수 없다.
+   * 삼성전자처럼 0개가 나오는 종목에서 어느 관문이 막았는지(대개 표본이 적어
+   * 앞뒤 기간을 못 나누는 ④번) 보여주면 그게 판정이라는 걸 알 수 있다.
+   */
+  const gateBlockers = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of allSignals) {
+      for (const c of s.checks) {
+        if (!c.ok) counts.set(c.label, (counts.get(c.label) ?? 0) + 1);
+      }
+    }
+    return [...counts].sort((a, b) => b[1] - a[1]);
+  }, [allSignals]);
+
+  /** 같은 q값이 여러 개면 그건 '서로 구분이 안 된다'는 뜻이다 (BH 보정에서 묶인 것). */
+  const qTied = useMemo(() => {
+    const q = buySignals.map((s) => s.qValue).filter((v): v is number => v != null);
+    if (q.length < 2) return false;
+    return new Set(q.map((v) => v.toFixed(4))).size < q.length;
+  }, [buySignals]);
+  const nearMiss = useMemo(
+    () => allSignals.filter((s) => s.grade === "B").sort((a, b) => (a.qValue ?? 1) - (b.qValue ?? 1)),
+    [allSignals],
   );
 
   return (
@@ -309,9 +378,7 @@ export default function CyclePage() {
             ? "과거 사이클 분석 중…"
             : busy === "fallback"
               ? "시세 직접 받아오는 중…"
-              : busy === "ask"
-                ? "다시 묻는 중…"
-                : "상승장 지표 찾기"}
+              : "상승장 지표 찾기"}
         </button>
       </div>
 
@@ -319,31 +386,53 @@ export default function CyclePage() {
         <div className="mt-6 space-y-4">
           {/* AI 요약 */}
           <section className="rounded-2xl border border-blue-500/30 bg-blue-500/5 p-4">
-            <h2 className="text-sm font-semibold">AI 요약</h2>
+            <div className="flex items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold">AI 요약</h2>
+              <span className="text-[10px] text-muted">
+                {payload.model ? `Gemini ${payload.model}` : "AI 없이 계산 결과만"}
+              </span>
+            </div>
             <p className="mt-2 text-sm leading-relaxed">{payload.reply}</p>
+            {qa ? (
+              <div className="mt-3 rounded-xl border border-border bg-bg px-3 py-2.5">
+                <p className="text-[11px] text-muted">Q. {qa.q}</p>
+                <p className="mt-1 text-sm leading-relaxed">{qa.a}</p>
+                {qa.model ? (
+                  <p className="mt-1.5 text-[10px] text-muted">Gemini {qa.model}</p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {askError ? (
+              <p className="mt-2 rounded-xl border border-down/40 bg-down/10 px-3 py-2 text-[11px] text-down">
+                {askError}
+              </p>
+            ) : null}
+
             <form
               className="mt-3 flex gap-2"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (!question.trim()) return;
-                void run(report.ticker, { question: question.trim() });
-                setQuestion("");
+                void ask();
               }}
             >
               <input
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
-                placeholder="예: 지금 사도 되는 자리야?"
+                placeholder="예: 지금 켜진 A등급 신호가 뭐야?"
                 className="min-w-0 flex-1 rounded-xl border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-muted"
               />
               <button
                 type="submit"
-                disabled={busy !== null || !question.trim()}
+                disabled={asking || !question.trim()}
                 className="shrink-0 rounded-xl bg-blue-500 px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
               >
-                물어보기
+                {asking ? "…" : "물어보기"}
               </button>
             </form>
+            <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
+              이 화면에 이미 계산된 숫자만 보고 답합니다. 종목을 다시 분석하지 않습니다.
+            </p>
           </section>
 
           {/* 현재 상태 */}
@@ -397,6 +486,113 @@ export default function CyclePage() {
                 })}
               </ul>
             ) : null}
+          </section>
+
+          {/* 매수 근거가 있는 신호 */}
+          <section className="rounded-2xl border border-up/30 bg-up/5 p-4">
+            <div className="flex items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold">사도 될 근거가 있는 신호</h2>
+              <span className="text-xs text-muted">여섯 관문 전부 통과</span>
+            </div>
+            {/* 채점의 자(사이클 수·창 비율)를 먼저 보여준다. 이게 종목마다 달라서
+                A등급 개수는 종목끼리 비교할 수 없다. */}
+            <p className="mt-1 text-[11px] leading-relaxed text-muted">
+              이 종목의 자: 상승장 전환 <b className="text-white">{report.cycles.length}번</b> · &lsquo;시작 부근&rsquo;이 전체의{" "}
+              <b className="text-white">{report.windowSharePct.toFixed(0)}%</b>
+              {report.windowShrunk ? (
+                <>
+                  {" "}
+                  (사이클이 잦아 창을 {report.windowRequested.after}→{report.window.after}거래일로 줄임)
+                </>
+              ) : null}{" "}
+              · 우연대비 천장 {(100 / Math.max(1, report.windowSharePct)).toFixed(1)}배
+            </p>
+            <p className="mt-1 text-[11px] leading-relaxed text-amber-300/80">
+              A등급 <b>개수</b>는 종목끼리 비교하지 마세요. 사이클이 3번 이하면 앞뒤 기간을 못 나눠 관문 ④에서 전부
+              떨어지고(그 종목이 나쁜 게 아닙니다), 너무 잦으면 창이 넓어져 관문 ②가 막힙니다. 같은 모양의 시세로
+              주기만 바꿔도 A등급 개수가 크게 요동칩니다.
+            </p>
+
+            {buySignals.length ? (
+              <ul className="mt-2.5 space-y-1.5">
+                {buySignals.map((s) => (
+                  <li key={s.key}>
+                    <button
+                      type="button"
+                      onClick={() => showSignal(s.key)}
+                      className="w-full rounded-lg px-1 py-1 text-left active:bg-bg"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span
+                          aria-hidden
+                          className={`h-2 w-2 shrink-0 rounded-full ${s.currentlyOn ? "bg-up" : "bg-border"}`}
+                        />
+                        <span className="min-w-0 flex-1 truncate text-sm">{s.label}</span>
+                        <GradeBadge grade={s.grade} passCount={s.passCount} />
+                        <span
+                          className={`shrink-0 text-[11px] ${s.currentlyOn ? "text-up" : "text-muted"}`}
+                        >
+                          {s.currentlyOn ? "지금 켜짐" : "꺼짐"}
+                        </span>
+                        <span aria-hidden className="shrink-0 text-[11px] text-muted">
+                          📈
+                        </span>
+                      </span>
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-3 pl-4 text-[11px] text-muted">
+                        <TimingChip timing={s.timing} />
+                        <span>
+                          적중 {s.hitCount}/{report.cycles.length}
+                        </span>
+                        <span>리드 {leadText(s.medianLeadDays)}</span>
+                        <span>
+                          남은상승{" "}
+                          {s.medianCaptureSharePct == null
+                            ? "—"
+                            : `${s.medianCaptureSharePct.toFixed(0)}%`}
+                        </span>
+                        <span className={qTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-sm leading-relaxed text-muted">
+                여섯 관문을 다 통과한 신호가 <b className="text-white">없습니다</b>. 이 종목·이 기간에서는
+                &lsquo;이거 뜨면 사도 된다&rsquo;고 말할 근거가 데이터에 없다는 뜻입니다.
+                {nearMiss.length ? (
+                  <>
+                    {" "}
+                    하나만 못 넘긴 신호(B등급)는 {nearMiss.length}개 있습니다: {nearMiss.slice(0, 3).map((s) => s.label).join(", ")}
+                    {nearMiss.length > 3 ? " 외" : ""}.
+                  </>
+                ) : null}
+                {gateBlockers.length ? (
+                  <span className="mt-2 block text-[11px] text-muted">
+                    무엇이 막았나 (걸린 지표 수):{" "}
+                    {gateBlockers.slice(0, 3).map(([label, n]) => `${label} ${n}개`).join(" · ")}
+                    {report.cycles.length <= 3
+                      ? " — 상승장 전환이 3번 이하라 앞뒤 기간 검증(관문 ④) 자체가 불가능합니다. 기준을 낮춰 사이클을 더 잡거나, 더 긴 데이터가 필요합니다."
+                      : ""}
+                  </span>
+                ) : null}
+              </p>
+            )}
+
+            {qTied ? (
+              <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                위 신호들의 &lsquo;보정후&rsquo; 값이 같은 숫자로 겹칩니다. 다중검정 보정(q값)이 같은 구간으로 묶은 것이라,
+                <b className="text-white"> 서로 우열을 가릴 수 없다</b>는 뜻입니다 — 각각 독립으로 증명된 게 아닙니다.
+                게다가 조합은 구성 지표와 겹쳐 서로 독립이 아니므로, 이 값은 낙관적인 쪽입니다.
+              </p>
+            ) : null}
+
+            <p className="mt-2.5 border-t border-border pt-2 text-[11px] leading-relaxed text-muted">
+              여섯 관문: ① 다중검정 보정 후에도 우연이 아님 ② 아무 날이나 찍은 것보다 1.5배 이상 자주 상승장
+              시작을 가리킴 ③ 신호 후 1년 수익률이 그냥 산 것보다 높음 ④ 앞 기간·뒤 기간 모두에서 통함
+              ⑤ 상승장 시작을 절반 이상 잡음 ⑥ 떴을 때 그 사이클 상승분이 절반 이상 남아 있었음. 성적표에서
+              지표를 누르면 관문별 통과 여부가 나옵니다.
+            </p>
           </section>
 
           {/* 사이클 목록 + 차트 */}
@@ -460,6 +656,16 @@ export default function CyclePage() {
                     className="min-w-0 flex-1 rounded-lg border border-border bg-surface px-2 py-2 text-sm"
                   >
                     <option value="">지표 없음 (캔들만)</option>
+                    {report.combos.length ? (
+                      <optgroup label="조합 (둘 다 켜짐)">
+                        {report.combos.map((sig) => (
+                          <option key={sig.key} value={sig.key}>
+                            {sig.currentlyOn ? "● " : "○ "}[{sig.grade}] {sig.label} ·{" "}
+                            {sig.hitCount}/{report.cycles.length}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null}
                     {SIGNAL_GROUPS.map((g) => {
                       const inGroup = report.signals.filter((sig) => sig.group === g);
                       if (!inGroup.length) return null;
@@ -467,8 +673,8 @@ export default function CyclePage() {
                         <optgroup key={g} label={g}>
                           {inGroup.map((sig) => (
                             <option key={sig.key} value={sig.key}>
-                              {sig.currentlyOn ? "● " : "○ "}
-                              {sig.label} · {sig.hitCount}/{report.cycles.length}
+                              {sig.currentlyOn ? "● " : "○ "}[{sig.grade}] {sig.label} ·{" "}
+                              {sig.hitCount}/{report.cycles.length}
                             </option>
                           ))}
                         </optgroup>
@@ -487,7 +693,7 @@ export default function CyclePage() {
                 {selectedSignal ? (
                   <p className="mt-2 px-0.5 text-[11px] leading-relaxed text-muted">
                     <b className="text-white">
-                      {report.signals.findIndex((sig) => sig.key === selectedSignal.key) + 1}위
+                      {selectedSignal.grade}등급 {selectedSignal.passCount}/6
                     </b>{" "}
                     · {plot?.rule || selectedSignal.why} · 지금{" "}
                     <b className={selectedSignal.currentlyOn ? "text-up" : "text-muted"}>
@@ -496,25 +702,12 @@ export default function CyclePage() {
                     <br />
                     과거 상승장 시작 {report.cycles.length}번 중{" "}
                     <b className="text-white">{selectedSignal.hitCount}번</b> 적중(
-                    {selectedSignal.hitRate == null ? "—" : `${selectedSignal.hitRate.toFixed(0)}%`}) · 신호{" "}
-                    {selectedSignal.eventCount}회 · 우연일 확률{" "}
-                    <b
-                      className={
-                        selectedSignal.chance == null
-                          ? "text-muted"
-                          : selectedSignal.chance < 0.05
-                            ? "text-up"
-                            : selectedSignal.chance < 0.2
-                              ? "text-white"
-                              : "text-down"
-                      }
-                    >
-                      {selectedSignal.chance == null
-                        ? "—"
-                        : selectedSignal.chance < 0.001
-                          ? "0.1% 미만"
-                          : `${(selectedSignal.chance * 100).toFixed(selectedSignal.chance < 0.1 ? 1 : 0)}%`}
-                    </b>
+                    {selectedSignal.hitRate == null ? "—" : `${selectedSignal.hitRate.toFixed(0)}%`})
+                    {selectedSignal.alreadyOnCount
+                      ? ` · 이미 켜짐 ${selectedSignal.alreadyOnCount}회(적중 아님)`
+                      : ""}{" "}
+                    · 신호 {selectedSignal.eventCount}회 · 우연일 확률{" "}
+                    <b className={chanceTone(selectedSignal.chance)}>{chancePct(selectedSignal.chance)}</b>
                   </p>
                 ) : (
                   <p className="mt-2 px-0.5 text-[11px] text-muted">
@@ -574,42 +767,109 @@ export default function CyclePage() {
               적중률 100% ({report.cycles.length}/{report.cycles.length})
             </h2>
             {commonSignals.length ? (
+              <>
+                <ul className="mt-2.5 space-y-1.5">
+                  {commonSignals.map((s) => (
+                    <li key={s.key}>
+                      <button
+                        type="button"
+                        onClick={() => showSignal(s.key)}
+                        className="w-full rounded-lg px-1 py-1 text-left text-sm active:bg-bg"
+                      >
+                        <span className="flex items-center gap-2">
+                          <span
+                            aria-hidden
+                            className={`h-2 w-2 shrink-0 rounded-full ${s.currentlyOn ? "bg-up" : "bg-border"}`}
+                          />
+                          <span className="min-w-0 flex-1 truncate">{s.label}</span>
+                          <span className="shrink-0 text-sm font-bold">
+                            {s.hitCount}/{report.cycles.length}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-muted">
+                            {s.currentlyOn ? "켜짐" : "꺼짐"}
+                          </span>
+                          <span aria-hidden className="shrink-0 text-[11px] text-muted">
+                            📈
+                          </span>
+                        </span>
+                        <span className="mt-0.5 flex flex-wrap gap-x-3 pl-4 text-[11px] text-muted">
+                          <span>
+                            리드{" "}
+                            {s.medianLeadDays == null
+                              ? "—"
+                              : s.medianLeadDays >= 0
+                                ? `${s.medianLeadDays}일 늦게`
+                                : `${Math.abs(s.medianLeadDays)}일 먼저`}
+                          </span>
+                          <span>신호 {s.eventCount}회</span>
+                          <span className={chanceTone(s.chance)}>우연일 확률 {chancePct(s.chance)}</span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                  {report.cycles.length}번을 전부, 그 부근에서 <b className="text-white">새로 켜지면서</b> 잡은
+                  지표입니다. 표본이 {report.cycles.length}번뿐이라 100%라는 숫자만으로는 부족합니다 —{" "}
+                  <span className="text-up">우연일 확률이 초록불(20% 미만)</span>인지 같이 보세요.
+                </p>
+              </>
+            ) : (
+              <p className="mt-2 text-sm text-muted">
+                {report.cycles.length}번 전부를 새로 켜지면서 잡은 지표는 없습니다. 아래 성적표에서 적중률 순으로
+                보세요.
+              </p>
+            )}
+          </section>
+
+          {/* 조합 신호 */}
+          {report.combos.length ? (
+            <section className="rounded-2xl border border-border bg-surface p-4">
+              <div className="flex items-baseline justify-between gap-2">
+                <h2 className="text-sm font-semibold">조합 신호 (둘 다 켜지면)</h2>
+                <span className="text-xs text-muted">{report.combos.length}개 중 상위 6</span>
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
+                상위 지표들을 성격이 다른 것끼리 짝지어 &lsquo;둘 다 켜진 첫날&rsquo;을 신호로 채점했습니다.
+                겹치면 신호가 줄어드는 대신 헛신호가 걸러집니다. 조합도 단일 지표와 같은 보정 풀에 넣었습니다.
+              </p>
               <ul className="mt-2.5 space-y-1.5">
-                {commonSignals.map((s) => (
+                {report.combos.slice(0, 6).map((s) => (
                   <li key={s.key}>
                     <button
                       type="button"
                       onClick={() => showSignal(s.key)}
-                      className="flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left text-sm active:bg-bg"
+                      className="w-full rounded-lg border border-border bg-bg px-2.5 py-2 text-left active:bg-surface"
                     >
-                    <span
-                      aria-hidden
-                      className={`h-2 w-2 shrink-0 rounded-full ${s.currentlyOn ? "bg-up" : "bg-border"}`}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{s.label}</span>
-                    <span className="shrink-0 text-[11px] text-muted">
-                      {s.medianLeadDays == null
-                        ? "—"
-                        : s.medianLeadDays >= 0
-                          ? `${s.medianLeadDays}일 늦게`
-                          : `${Math.abs(s.medianLeadDays)}일 먼저`}
-                    </span>
-                    <span className="shrink-0 text-[11px] text-muted">
-                      {s.currentlyOn ? "켜짐" : "꺼짐"}
-                    </span>
-                    <span aria-hidden className="shrink-0 text-[11px] text-muted">
-                      📈
-                    </span>
+                      <span className="flex items-center gap-2">
+                        <span
+                          aria-hidden
+                          className={`h-2 w-2 shrink-0 rounded-full ${s.currentlyOn ? "bg-up" : "bg-border"}`}
+                        />
+                        <span className="min-w-0 flex-1 text-[13px] leading-snug">{s.label}</span>
+                        <GradeBadge grade={s.grade} passCount={s.passCount} />
+                      </span>
+                      <span className="mt-1 flex flex-wrap items-center gap-x-3 pl-4 text-[11px] text-muted">
+                        <TimingChip timing={s.timing} />
+                        <span>
+                          적중 {s.hitCount}/{report.cycles.length}
+                        </span>
+                        <span>신호 {s.eventCount}회</span>
+                        <span>리드 {leadText(s.medianLeadDays)}</span>
+                        <span>
+                          남은상승{" "}
+                          {s.medianCaptureSharePct == null
+                            ? "—"
+                            : `${s.medianCaptureSharePct.toFixed(0)}%`}
+                        </span>
+                        <span className={qTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
+                      </span>
                     </button>
                   </li>
                 ))}
               </ul>
-            ) : (
-              <p className="mt-2 text-sm text-muted">
-                모든 전환을 빠짐없이 잡은 지표는 없습니다. 아래 성적표에서 적중률 순으로 보세요.
-              </p>
-            )}
-          </section>
+            </section>
+          ) : null}
 
           <CycleSignalTable report={report} selectedKey={selectedKey} onSelect={showSignal} />
 

@@ -20,16 +20,20 @@ const SYSTEM = `너는 한국 주식·코인 차트 비서다.
 주어진 FACTS의 숫자와 날짜만 사용한다. 없는 값을 지어내지 마라.
 5~8문장 한국어. 다음을 반드시 포함한다:
 - 과거 상승장 전환이 몇 번이었고 언제였는지
-- 그 전환을 공통으로 가리킨 지표가 무엇인지
-- 그 지표가 바닥보다 빨랐는지 늦었는지
-- 지금 무엇이 켜져 있고 과거와 비교해 어느 정도인지
+- 매수 근거 여섯 관문을 다 통과한 A등급 신호가 있는지, 있다면 무엇이고 지금 켜져 있는지
+  (하나도 없으면 "근거가 데이터에 없다"고 분명히 말한다)
+- 그 신호가 바닥보다 빨랐는지 늦었는지
+- 지금 무엇이 켜져 있고 과거 상승장 시작 때와 비교해 어느 정도인지
 표본이 적다는 사실을 마지막에 한 문장으로 덧붙인다. 매수·매도를 권하지 마라.`;
 
-async function polish(facts: string, question: string): Promise<string | null> {
+async function polish(
+  facts: string,
+  question: string,
+): Promise<{ text: string; model: string } | null> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   if (!apiKey) return null;
   try {
-    const { text } = await generateText({
+    const { text, model } = await generateText({
       apiKey,
       system: SYSTEM,
       prompt: `사용자: ${question}\n\nFACTS:\n${facts}\n\n이 FACTS만 가지고 답해라.`,
@@ -40,7 +44,7 @@ async function polish(facts: string, question: string): Promise<string | null> {
     const trimmed = text.trim();
     // JSON을 그대로 뱉거나 너무 짧으면 템플릿 문장이 낫다.
     if (trimmed.startsWith("{") || trimmed.startsWith("```") || trimmed.length < 60) return null;
-    return trimmed;
+    return { text: trimmed, model };
   } catch (e) {
     if (e instanceof GeminiError) return null;
     return null;
@@ -121,7 +125,10 @@ export async function POST(req: Request) {
       typeof body.question === "string" && body.question.trim()
         ? body.question.trim().slice(0, 300)
         : `${ticker}는 과거 상승장이 올 때 어떤 지표들이 공통으로 신호를 줬어?`;
-    const reply = (await polish(factsForLlm(report), question)) ?? fallbackText;
+    const polished = await polish(factsForLlm(report), question);
+    const reply = polished?.text ?? fallbackText;
+    // 어느 모델이 답했는지 화면에 그대로 보여준다. 별칭이 어디로 붙는지는 그때그때 다르다.
+    const model = polished?.model ?? null;
 
     // 차트용 시계열. 캔들과 지표 오버레이를 브라우저에서 그리려면 OHLCV가 다 필요하다.
     // 20년치면 5,000봉이라 자릿수를 줄여 payload를 절반으로 만든다
@@ -135,7 +142,7 @@ export async function POST(req: Request) {
       volume: Math.round(b.volume),
     }));
 
-    return json({ report, series, reply, fallbackText });
+    return json({ report, series, reply, fallbackText, model });
   } catch (e) {
     if (e instanceof DataProviderError) return json({ error: e.message }, { status: e.status });
     return json({ error: `분석 중 오류가 발생했습니다: ${(e as Error).message}` }, { status: 500 });

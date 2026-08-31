@@ -164,6 +164,11 @@ export function buildSignals(bars: EnrichedBar[]): SignalSeries[] {
     { key: "macd_m", label: "월봉 MACD 골든크로스", group: "모멘텀", why: "사이클 단위 전환 신호. 가장 느리지만 가장 덜 속는다", timeframe: "월봉" },
     fromPeriod(monthly.periodOf, gt(mMacd.macd, mMacd.signal)),
   );
+  const mRsi = rsi(mCloses);
+  push(
+    { key: "rsi_m50", label: "월봉 RSI 50 위", group: "모멘텀", why: "월간 모멘텀이 매수 우위로 넘어가는 자리. 코인 사이클 전환에 자주 인용된다", timeframe: "월봉" },
+    fromPeriod(monthly.periodOf, gtValue(mRsi, 50)),
+  );
   const mMa12 = sma(mCloses, 12);
   push(
     { key: "m_ma12", label: "12개월선 위 (월봉)", group: "추세", why: "장기 투자자가 보는 1년 이동평균", timeframe: "월봉" },

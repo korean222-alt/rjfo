@@ -37,6 +37,24 @@ export function narrate(report: CycleReport): string {
       ".",
   );
 
+  // 사용자가 실제로 묻는 것부터 답한다: "그래서 사도 되는 신호가 있냐".
+  const buyable = [...signals, ...report.combos].filter((s) => s.grade === "A");
+  if (buyable.length) {
+    const on = buyable.filter((s) => s.currentlyOn);
+    lines.push(
+      `매수 근거 여섯 관문을 다 통과한 신호는 ${buyable.length}개입니다: ` +
+        buyable.slice(0, 4).map((s) => s.label).join(", ") +
+        (buyable.length > 4 ? " 외" : "") +
+        `. 그중 지금 켜져 있는 건 ${on.length}개입니다` +
+        (on.length ? ` (${on.slice(0, 4).map((s) => s.label).join(", ")}).` : "."),
+    );
+  } else {
+    lines.push(
+      "매수 근거 여섯 관문을 다 통과한 신호는 없습니다. 이 종목·이 기간에서 '이거 뜨면 사도 된다'고 " +
+        "말할 근거는 데이터에 없습니다.",
+    );
+  }
+
   const common = signals.filter((s) => report.commonKeys.includes(s.key));
   if (common.length) {
     lines.push(
@@ -49,7 +67,7 @@ export function narrate(report: CycleReport): string {
     lines.push(`모든 전환을 빠짐없이 잡은 지표는 없었습니다.`);
   }
 
-  const best = signals[0];
+  const best = buyable[0] ?? signals[0];
   if (best) {
     const lead =
       best.medianLeadDays == null
@@ -58,9 +76,9 @@ export function narrate(report: CycleReport): string {
           ? `바닥보다 중앙값 ${best.medianLeadDays}거래일 늦게`
           : `바닥보다 중앙값 ${Math.abs(best.medianLeadDays)}거래일 먼저`;
     lines.push(
-      `종합 1위는 "${best.label}"입니다. ${cycles.length}번 중 ${best.hitCount}번 적중` +
+      `${buyable.length ? "그중 가장 확실한" : "그나마 종합 1위인"} 신호는 "${best.label}"입니다. ${cycles.length}번 중 ${best.hitCount}번 적중` +
         (best.alreadyOnCount
-          ? ` (그중 ${best.alreadyOnCount}번은 바닥 당시 이미 켜져 있던 상태)`
+          ? ` (그 밖에 ${best.alreadyOnCount}번은 새 신호 없이 바닥 당시 켜져만 있어서 적중으로 안 셌습니다)`
           : "") +
         `, ${lead} 떴고, ` +
         `그 시점에 그 사이클 상승분의 ${pct(best.medianCaptureSharePct)}가 아직 남아 있었습니다.`,
@@ -70,6 +88,19 @@ export function narrate(report: CycleReport): string {
         best.lift >= 1
           ? `이 지표의 신호는 아무 날이나 찍었을 때보다 상승장 시작을 ${best.lift.toFixed(1)}배 자주 가리켰습니다.`
           : `다만 아무 날이나 찍는 것보다 나을 게 없습니다(우연대비 ${best.lift.toFixed(2)}배).`,
+      );
+    }
+    if (best.chance != null) {
+      lines.push(
+        `이 성적이 우연일 확률은 ${(best.chance * 100).toFixed(best.chance < 0.1 ? 1 : 0)}%,` +
+          ` 지표를 한꺼번에 검사한 걸 보정하면 ${best.qValue == null ? "—" : `${(best.qValue * 100).toFixed(best.qValue < 0.1 ? 1 : 0)}%`}입니다` +
+          (best.chance >= 0.2 ? " — 우연으로도 충분히 나오는 수준입니다." : "."),
+      );
+    }
+    if (best.drawdown.medianPct != null) {
+      lines.push(
+        `이 신호 다음 날 사서 1년 들고 갔다면 그 사이 보통 ${best.drawdown.medianPct.toFixed(0)}%,` +
+          ` 최악은 ${best.drawdown.worstPct?.toFixed(0) ?? "—"}% 물렸습니다.`,
       );
     }
     const base = report.baseline["250"].avg;
