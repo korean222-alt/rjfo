@@ -96,6 +96,23 @@ const C = {
   grey: "#8b97a8",
 };
 
+/**
+ * 패널 선을 캔들 날짜에 맞춰 정렬한다. 값이 없는 자리는 null.
+ *
+ * 패널 차트는 메인 차트와 '논리 인덱스'로 묶인다(lightweight-charts v4에 진짜 멀티패널이
+ * 없어서 쓰는 표준 방법). 그런데 지표 선은 워밍업 구간이 비어 있어 점 개수가 캔들보다
+ * 적다 — 월봉 RSI는 앞의 15개월이 없고, 5년치 일봉 차트에서 그건 전체의 25%다.
+ * 그대로 넣으면 패널의 0번 점이 캔들 300번째 자리에 놓여 선 전체가 왼쪽으로 밀리고
+ * 캔들보다 한참 앞에서 끝나 버린다. 빈 자리를 null로 채워 인덱스를 캔들과 같게 만든다.
+ */
+export function alignToDates(dates: string[], data: PlotPoint[]): (number | null)[] {
+  const byDate = new Map(data.map((p) => [p.date, p.value]));
+  return dates.map((d) => {
+    const v = byDate.get(d);
+    return v == null ? null : v;
+  });
+}
+
 function dated(bars: EnrichedBar[], values: (number | null)[], label: string, color: string, extra: Partial<PlotLine> = {}): PlotLine {
   const data: PlotPoint[] = [];
   for (let i = 0; i < bars.length; i++) {

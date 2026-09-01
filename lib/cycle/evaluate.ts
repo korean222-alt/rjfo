@@ -178,6 +178,16 @@ export type SignalEvaluation = SignalDef & {
   /** 기간을 반으로 갈라 본 성적. 사이클이 2개 미만이면 못 잰다. */
   walkForward: WalkForward | null;
   currentlyOn: boolean | null;
+  /**
+   * 전체 기간 중 이 지표가 '그냥 켜져 있던' 비율(%).
+   *
+   * 적중률 100%를 어떻게 읽어야 하는지가 여기서 갈린다. 기간의 70%를 켜져 있는
+   * 지표라면 상승장 시작이 언제였든 대부분 켜져 있었을 테니 적중률이 높은 게 당연하다.
+   * (실제로 월봉 RSI 50 위는 S&P 500 155년 중 68%가 켜짐이고, 12개월 뒤 수익률은
+   *  아무 날이나 산 것과 +0.03%p 차이였다 — scripts/backtest-monthly.ts)
+   * 우연대비(lift)가 이미 그걸 보정하지만, 이 숫자를 같이 보여줘야 왜 그런지가 보인다.
+   */
+  onSharePct: number | null;
   lastEventDate: string | null;
   daysSinceLastEvent: number | null;
   score: number;
@@ -561,6 +571,15 @@ export function evaluateSignal(
   const currentlyOn = signal.state[lastIdx] ?? null;
   const lastEvent = events.length ? events[events.length - 1] : null;
 
+  let onDays = 0;
+  let knownDays = 0;
+  for (const v of signal.state) {
+    if (v == null) continue;
+    knownDays++;
+    if (v) onDays++;
+  }
+  const onSharePct = knownDays ? (onDays / knownDays) * 100 : null;
+
   const captureMedian = median(
     hits.map((h) => h.captureSharePct).filter((v): v is number => v != null),
   );
@@ -604,6 +623,7 @@ export function evaluateSignal(
     timing: timingOf(medianLeadDays),
     walkForward,
     currentlyOn,
+    onSharePct,
     lastEventDate: lastEvent != null ? bars[lastEvent].date : null,
     daysSinceLastEvent: lastEvent != null ? lastIdx - lastEvent : null,
     score,

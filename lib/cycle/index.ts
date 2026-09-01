@@ -297,6 +297,7 @@ export function factsForLlm(report: CycleReport, topN = 6): string {
     신호횟수: s.eventCount,
     우연일확률: s.chance == null ? null : Number(s.chance.toFixed(4)),
     보정후q: s.qValue == null ? null : Number(s.qValue.toFixed(4)),
+    켜져있던기간비율: s.onSharePct == null ? null : Math.round(s.onSharePct),
     앞뒤기간모두통함: s.walkForward?.heldUp ?? null,
     "신호후1년_최대낙폭중앙값": s.drawdown.medianPct == null ? null : Math.round(s.drawdown.medianPct),
     "신호후1년_최악낙폭": s.drawdown.worstPct == null ? null : Math.round(s.drawdown.worstPct),

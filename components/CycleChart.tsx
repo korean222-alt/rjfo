@@ -14,6 +14,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import type { Bar } from "@/types";
+import { alignToDates } from "@/lib/cycle/plot";
 import type { SignalPlot } from "@/lib/cycle/plot";
 import type { ChartTf } from "@/lib/cycle/resample";
 
@@ -45,6 +46,32 @@ const RANGE_SPAN: Record<ChartTf, Record<RangeLabel, number | null>> = {
   "1w": { 전체: null, "10년": 520, "3년": 156, "1년": 52 },
   "1M": { 전체: null, "10년": 120, "3년": 36, "1년": 12 },
 };
+
+/**
+ * 패널 선을 캔들과 같은 인덱스에 올린다.
+ *
+ * 값이 없는 날짜에는 '값 없는 점'(whitespace)을 넣는다. lightweight-charts는 그런 점을
+ * 자리만 차지하고 그리지 않아서, 워밍업이 긴 지표(월봉 RSI 등)도 캔들과 어긋나지 않는다.
+ * 왜 인덱스를 맞춰야 하는지는 lib/cycle/plot.ts의 alignToDates 주석에 있다.
+ */
+function paneData(
+  candles: Bar[],
+  data: { date: string; value: number }[],
+): ({ time: UTCTimestamp } | { time: UTCTimestamp; value: number })[] {
+  const aligned = alignToDates(
+    candles.map((b) => b.date),
+    data,
+  );
+  // 날짜 체계가 아예 다르면(있어서는 안 되지만) 빈 패널을 그리느니 원본을 그대로 쓴다.
+  if (!aligned.some((v) => v != null)) {
+    return data.map((p) => ({ time: p.date as unknown as UTCTimestamp, value: p.value }));
+  }
+  return candles.map((b, i) => {
+    const time = b.date as unknown as UTCTimestamp;
+    const v = aligned[i];
+    return v == null ? { time } : { time, value: v };
+  });
+}
 
 function baseOptions(width: number, height: number, log: boolean) {
   return {
@@ -262,9 +289,7 @@ export default function CycleChart({
           priceLineVisible: false,
           lastValueVisible: false,
         });
-        s.setData(
-          line.data.map((p) => ({ time: p.date as unknown as UTCTimestamp, value: p.value })),
-        );
+        s.setData(paneData(series, line.data));
         first ??= s;
       }
       for (const level of pane.levels) {

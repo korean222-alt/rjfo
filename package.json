@@ -14,7 +14,8 @@
     "test:data": "tsx scripts/data-test.ts",
     "test:scan": "tsx scripts/scan-test.ts",
     "test:cycle": "tsx scripts/cycle-test.ts",
-    "test:candle": "tsx scripts/candle-test.ts"
+    "test:candle": "tsx scripts/candle-test.ts",
+    "backtest": "tsx scripts/backtest-monthly.ts"
   },
   "dependencies": {
     "next": "14.2.35",

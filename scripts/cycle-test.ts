@@ -26,7 +26,7 @@ import { fdrQValues } from "../lib/cycle/grade";
 import { toMonthly, toWeekly, projectToDaily, barsForView, snapDatesToView } from "../lib/cycle/resample";
 import { ema, macd, rsi, sma } from "../lib/cycle/ta";
 import { narrate } from "../lib/cycle/narrative";
-import { plotForSignal, plotForView } from "../lib/cycle/plot";
+import { alignToDates, plotForSignal, plotForView } from "../lib/cycle/plot";
 import { buildSignals } from "../lib/cycle/signals";
 import { toTradingViewSymbol } from "../lib/tradingview";
 import type { Bar } from "../types";
@@ -543,6 +543,7 @@ console.log("\n[11] 적중 판정 (이미 켜짐, 창 겹침 없음)");
   };
   const always = evaluateSignal(bars, alwaysOn, cycles, baseline, share);
   assert(always.hitCount === 0, `항상 켜짐은 적중이 아니다 (실제 ${always.hitCount})`);
+  assert(always.onSharePct === 100, `항상 켜짐은 켜져있던 비율 100% (실제 ${always.onSharePct})`);
   assert(always.alreadyOnCount === 2, `둘 다 '이미 켜짐'으로만 기록 (실제 ${always.alreadyOnCount})`);
   assert(always.cycleHits.every((h) => !h.hit), "항상 켜짐은 어떤 사이클도 hit가 아니다");
   assert(always.eventCount === 0, `상승 엣지가 없으면 신호 0회 (실제 ${always.eventCount})`);
@@ -594,6 +595,11 @@ console.log("\n[11] 적중 판정 (이미 켜짐, 창 겹침 없음)");
   assert(timedEval.hitCount === 2, `바닥 직후 점등은 두 사이클 모두 적중 (실제 ${timedEval.hitCount})`);
   assert(timedEval.alreadyOnCount === 0, "바닥 당시에는 꺼져 있었고 직후 켜짐");
   assert(timedEval.falseAlarms === 0, `창 안 신호는 오탐 아님 (실제 ${timedEval.falseAlarms})`);
+  // 4일만 켜져 있던 지표: 400봉 중 4일 = 1%.
+  assert(
+    timedEval.onSharePct != null && Math.abs(timedEval.onSharePct - 1) < 0.01,
+    `잠깐만 켜지면 켜져있던 비율도 낮다 (실제 ${timedEval.onSharePct?.toFixed(2)}%)`,
+  );
 
   // 창 안에서 여러 번 떠도 전부 '맞은 신호'로 센다.
   //
@@ -967,10 +973,56 @@ console.log("\n[15] A등급 텔레그램 알림 — 무엇을 보내고 무엇�
   assert(!/undefined|NaN/.test(text), `본문에 undefined/NaN 없음 (${text.slice(0, 80)})`);
 }
 
-// ── 16. 실데이터 (인자로 티커를 주면) ─────────────────────────────
+// ── 16. 패널이 캔들과 같은 자리에 그려지는지 ──────────────────────
+//
+// 패널 차트는 메인 차트와 논리 인덱스로 묶여 있어서, 점 개수가 다르면 선 전체가
+// 옆으로 밀린다. 실제로 월봉 RSI가 캔들보다 25% 앞에서 끝나 보이던 버그가 이것이었다.
+console.log("\n[16] 패널·캔들 정렬");
+{
+  const closes: number[] = [100];
+  for (let i = 1; i < 1300; i++) {
+    closes.push(closes[i - 1] * (1 + 0.0004 + Math.sin(i / 90) * 0.004 + Math.sin(i * 2.3) * 0.006));
+  }
+  const bars = enrich(barsFromCloses(closes));
+
+  // 정렬 함수 자체: 앞이 비어 있어도 길이는 날짜 수와 같고, 값은 날짜에 붙어 있어야 한다.
+  const dates = ["2024-01-01", "2024-01-02", "2024-01-03"];
+  const aligned = alignToDates(dates, [{ date: "2024-01-03", value: 7 }]);
+  assert(aligned.length === 3, "정렬 결과 길이 = 캔들 수");
+  assert(aligned[0] === null && aligned[1] === null && aligned[2] === 7, "값이 제 날짜에 붙는다");
+
+  const paneKeys = ["rsi_m50", "macd_m", "rsi_w50", "macd_w", "macd_d", "rsi_d50", "stoch", "cci", "adx", "obv"];
+  let shifted = 0;
+  let lost = 0;
+  for (const tf of ["1d", "1w", "1M"] as const) {
+    const view = barsForView(bars, tf);
+    const viewDates = view.map((b) => b.date);
+    for (const key of paneKeys) {
+      const plot = tf === "1d" ? plotForSignal(key, bars) : plotForView(key, bars, tf);
+      for (const line of plot.pane?.lines ?? []) {
+        if (!line.data.length) continue;
+        const a = alignToDates(viewDates, line.data);
+        if (a.length !== view.length) shifted++;
+        // 캔들 날짜 위의 점은 하나도 잃지 않아야 한다.
+        if (a.filter((v) => v != null).length !== line.data.length) lost++;
+      }
+    }
+  }
+  assert(shifted === 0, `모든 패널 선이 캔들 수만큼의 자리를 갖는다 (어긋난 것 ${shifted}개)`);
+  assert(lost === 0, `정렬하면서 점을 잃지 않는다 (잃은 선 ${lost}개)`);
+
+  // 이 버그가 실제로 있었다는 걸 남겨 둔다: 정렬 전에는 월봉 RSI 점이 캔들보다 훨씬 적다.
+  const rsiM = plotForSignal("rsi_m50", bars).pane!.lines[0];
+  assert(
+    rsiM.data.length < bars.length * 0.95,
+    `월봉 RSI는 워밍업 때문에 원래 점이 적다 (${rsiM.data.length}/${bars.length})`,
+  );
+}
+
+// ── 17. 실데이터 (인자로 티커를 주면) ─────────────────────────────
 const ticker = process.argv[2];
 if (ticker) {
-  console.log(`\n[16] 실데이터: ${ticker}`);
+  console.log(`\n[17] 실데이터: ${ticker}`);
   (async () => {
     const { loadBars, MAX_YEARS } = await import("../lib/data");
     const { normalizeTicker } = await import("../lib/data/provider");

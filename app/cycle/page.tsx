@@ -708,6 +708,16 @@ export default function CyclePage() {
                       : ""}{" "}
                     · 신호 {selectedSignal.eventCount}회 · 우연일 확률{" "}
                     <b className={chanceTone(selectedSignal.chance)}>{chancePct(selectedSignal.chance)}</b>
+                    {selectedSignal.onSharePct != null ? (
+                      <>
+                        <br />이 지표는 전체 기간의{" "}
+                        <b className="text-white">{selectedSignal.onSharePct.toFixed(0)}%</b>를 켜져
+                        있었습니다.
+                        {selectedSignal.onSharePct >= 60
+                          ? " 늘 켜져 있는 지표는 상승장 시작이 언제였든 대부분 켜져 있었을 테니, 적중률이 높은 게 당연합니다 — 적중률 말고 우연대비를 보세요."
+                          : ""}
+                      </>
+                    ) : null}
                   </p>
                 ) : (
                   <p className="mt-2 px-0.5 text-[11px] text-muted">
