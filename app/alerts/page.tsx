@@ -29,6 +29,7 @@ type AlertsState = {
   storageSource?: { urlKey: string; tokenKey: string } | null;
   telegram: { botToken: boolean; chatId: boolean };
   deployment?: { env: string; branch: string | null };
+  cronSecret?: boolean;
 };
 
 type GradeWatch = { ticker: string; createdAt: string; notified?: Record<string, string> };
@@ -254,6 +255,7 @@ export default function AlertsPage() {
             <li>{state.telegram.botToken ? "✅" : "❌"} 봇 토큰 (TELEGRAM_BOT_TOKEN)</li>
             <li>{state.telegram.chatId ? "✅" : "❌"} 채팅 ID (TELEGRAM_CHAT_ID)</li>
             <li>{state.storage ? "✅" : "❌"} 알림 목록 저장소 (KV / Upstash Redis)</li>
+            <li>{state.cronSecret ? "✅" : "❌"} 크론 인증 (CRON_SECRET)</li>
           </ul>
           {/* Vercel 환경변수는 Production / Preview가 따로다. 여기가 Preview면
               "예전에 넣었는데 왜 또?"의 답이 대개 이것이다. */}
@@ -277,6 +279,7 @@ export default function AlertsPage() {
           <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-amber-100/90">
             {!state.telegram.botToken ? <li>텔레그램에서 <span className="font-semibold">@BotFather</span>에게 <code>/newbot</code>을 보내 봇을 만들고, 받은 토큰을 Vercel 환경변수 <code className="text-amber-200">TELEGRAM_BOT_TOKEN</code>에 넣으세요.</li> : null}
             {!state.telegram.chatId ? <li>방금 만든 봇에게 아무 메시지나 한 번 보낸 뒤 <Link href="/api/alerts/chat-id" className="underline">이 주소</Link>를 열어 나온 id를 <code className="text-amber-200">TELEGRAM_CHAT_ID</code>에 넣으세요.</li> : null}
+            {state.cronSecret === false ? <li><span className="font-semibold">CRON_SECRET이 없습니다.</span> 이게 없으면 알림 API 주소를 아는 사람이 크론을 직접 돌리고 텔레그램을 발송할 수 있어서, 운영 배포에서는 크론을 거절합니다 — 즉 <span className="font-semibold">알림이 오지 않습니다</span>. Vercel 프로젝트 Settings → Environment Variables에서 <code className="text-amber-200">CRON_SECRET</code>에 아무 긴 무작위 문자열을 넣고 Production에 저장한 뒤 재배포하세요. Vercel Cron이 그 값을 자동으로 붙여 줍니다.</li> : null}
             {!state.storage ? <li>Vercel 프로젝트에 KV(Upstash Redis) 스토어를 연결하세요. 이미 연결했다면 환경변수 이름이 <code className="text-amber-200">KV_REST_API_URL</code> / <code className="text-amber-200">KV_REST_API_TOKEN</code>(또는 <code>UPSTASH_REDIS_REST_URL</code> / <code>UPSTASH_REDIS_REST_TOKEN</code>)인지 확인하세요 — 스토어를 붙일 때 접두사를 넣으면 이름이 바뀝니다. <Link href="/api/diag" className="underline">진단 화면</Link>의 <code>kvEnvNames</code>가 실제로 인식된 이름입니다.</li> : null}
           </ol>
           <p className="mt-2 text-xs text-amber-100/70">환경변수를 바꾼 뒤에는 다시 배포해야 적용됩니다.</p>

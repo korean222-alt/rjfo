@@ -75,6 +75,8 @@ export async function GET(req: Request) {
       kvEnvNames: kvSource(),
       hasGeminiKey: Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
       hasTwelveDataKey: Boolean(process.env.TWELVE_DATA_API_KEY),
+      // 크론 인증. 운영에서 이게 false면 알림 크론이 503으로 거절된다.
+      hasCronSecret: Boolean(process.env.CRON_SECRET?.trim()),
     },
     sources,
     funding: {

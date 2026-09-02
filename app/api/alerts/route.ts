@@ -29,6 +29,12 @@ function status() {
       env: process.env.VERCEL_ENV ?? (process.env.VERCEL ? "unknown" : "local"),
       branch: process.env.VERCEL_GIT_COMMIT_REF ?? null,
     },
+    /**
+     * 크론 인증이 설정되어 있는지 (값은 아니다).
+     * 이게 없으면 운영 배포에서 크론 엔드포인트가 거절되므로 알림이 아예 안 온다.
+     * 화면에 안 보이면 "왜 조용하지"를 알아낼 방법이 없다.
+     */
+    cronSecret: Boolean(process.env.CRON_SECRET?.trim()),
     signals: ALERT_SIGNALS.map((c) => ({ key: c.key, label: c.label, hint: c.hint })),
   };
 }
