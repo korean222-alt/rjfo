@@ -5,6 +5,7 @@ import { DataProviderError, isValidTicker, normalizeTicker } from "@/lib/data/pr
 import { generateText, GeminiError } from "@/lib/gemini";
 import { enrich } from "@/lib/indicators";
 import { analyzeCycle, factsForLlm } from "@/lib/cycle";
+import { toChartSeries } from "@/lib/cycle/series";
 import { narrate } from "@/lib/cycle/narrative";
 import { BarValidationError, validateBars } from "@/lib/validate-bars";
 
@@ -51,17 +52,14 @@ async function polish(
   }
 }
 
-/** 큰 값은 소수점을 줄인다. 67234.5678 → 67234.6, 0.00012345 → 0.00012345 */
-function round(v: number): number {
-  const abs = Math.abs(v);
-  if (abs >= 1000) return Number(v.toFixed(1));
-  if (abs >= 1) return Number(v.toFixed(3));
-  return Number(v.toFixed(8));
-}
-
-function clampPct(raw: unknown, fallback: number): number {
+/**
+ * 화면에서 넘어온 임계값. 숫자가 아니면 undefined를 돌려 자산군 기본값
+ * (regime.ts의 주식 -20/+40, 코인 -40/+80)을 그대로 쓰게 한다.
+ * 예전에는 여기서 20/25를 대신 넣어, 코인인데 조용히 주식 기준으로 채점되곤 했다.
+ */
+function clampPct(raw: unknown): number | undefined {
   const n = Number(raw);
-  if (!Number.isFinite(n)) return fallback;
+  if (!Number.isFinite(n)) return undefined;
   return Math.min(90, Math.max(5, Math.round(n)));
 }
 
@@ -113,10 +111,12 @@ export async function POST(req: Request) {
     }
 
     const enriched = enrich(bars);
+    const bearPct = clampPct(body.bearPct);
+    const bullPct = clampPct(body.bullPct);
     const report = analyzeCycle(ticker, enriched, {
       thresholds: {
-        ...(body.bearPct !== undefined ? { bearPct: clampPct(body.bearPct, 20) } : {}),
-        ...(body.bullPct !== undefined ? { bullPct: clampPct(body.bullPct, 25) } : {}),
+        ...(bearPct !== undefined ? { bearPct } : {}),
+        ...(bullPct !== undefined ? { bullPct } : {}),
       },
     });
 
@@ -130,17 +130,8 @@ export async function POST(req: Request) {
     // 어느 모델이 답했는지 화면에 그대로 보여준다. 별칭이 어디로 붙는지는 그때그때 다르다.
     const model = polished?.model ?? null;
 
-    // 차트용 시계열. 캔들과 지표 오버레이를 브라우저에서 그리려면 OHLCV가 다 필요하다.
-    // 20년치면 5,000봉이라 자릿수를 줄여 payload를 절반으로 만든다
-    // (지표 계산에 쓰기엔 충분한 정밀도다).
-    const series = enriched.map((b) => ({
-      date: b.date,
-      open: round(b.open),
-      high: round(b.high),
-      low: round(b.low),
-      close: round(b.close),
-      volume: Math.round(b.volume),
-    }));
+    // 차트용 시계열 (lib/cycle/series.ts). 브라우저가 여기에 같은 enrich()를 다시 돌린다.
+    const series = toChartSeries(enriched);
 
     return json({ report, series, reply, fallbackText, model });
   } catch (e) {

@@ -24,7 +24,14 @@ import {
   sma,
   stochastic,
 } from "./ta";
-import { projectToDaily, toMonthly, toWeekly, type ChartTf, CHART_TF_UNIT } from "./resample";
+import {
+  projectToDaily,
+  toMonthly,
+  toWeekly,
+  type ChartTf,
+  CHART_TF_LABEL,
+  CHART_TF_UNIT,
+} from "./resample";
 
 export type PlotPoint = { date: string; value: number };
 
@@ -52,6 +59,11 @@ export type SignalPlot = {
   panes?: PlotPane[];
   /** 무엇이 켜짐 조건인지 사람 말로. 차트 아래 캡션. */
   rule: string;
+  /**
+   * 그릴 수 없거나 성적표와 다르게 읽힐 때 화면에 띄울 경고. 없으면 null.
+   * 빈 차트를 그냥 보여주면 사용자는 '지표가 고장났다'고 읽는다.
+   */
+  note?: string | null;
 };
 
 /**
@@ -73,6 +85,7 @@ export function mergePlots(a: SignalPlot, b: SignalPlot): SignalPlot {
     overlays,
     pane: uniquePanes[0] ?? null,
     panes: uniquePanes,
+    note: a.note ?? b.note ?? null,
     rule:
       a.rule && b.rule
         ? `둘 다 켜져 있어야 켜짐 — ① ${a.rule} ② ${b.rule}`
@@ -440,7 +453,7 @@ function build(key: string, ctx: Ctx): SignalPlot {
         overlays: [
           dated(bars, rollingMax(highs, 252), "52주 최고가", C.amber, { width: 2 }),
         ],
-        rule: "종가가 52주(252거래일) 최고가에 닿으면 켜짐",
+        rule: "그날 고가가 52주(252거래일) 최고가를 새로 찍으면 켜짐",
       };
     case "off_low_20": {
       const low = rollingMin(lows, 252);
@@ -558,7 +571,27 @@ export function plotForView(key: string, dailyBars: EnrichedBar[], tf: ChartTf):
   const period = tf === "1w" ? toWeekly(dailyBars) : toMonthly(dailyBars);
   const bars = enrich(period.bars);
   const nativeKey = VIEW_ALIAS[key] ?? key;
-  return buildOn(nativeKey, bars, CHART_TF_UNIT[tf]);
+  const plot = buildOn(nativeKey, bars, CHART_TF_UNIT[tf]);
+  return { ...plot, note: viewNote(plot, CHART_TF_LABEL[tf], bars.length) };
+}
+
+/**
+ * 주/월봉 보기에서 화면에 같이 띄울 경고.
+ *
+ * 이 화면은 지표를 '그 봉에서 다시 계산'한다(TradingView에서 봉을 바꾼 것과 같다).
+ * 그래서 200일선을 고르고 월봉으로 바꾸면 그림은 200개월선이 되는데, 성적표의
+ * 켜짐/꺼짐은 여전히 일봉 200일선으로 판정한 값이다. 둘이 다르다는 걸 안 적어 두면
+ * "차트에선 선 위인데 신호는 안 떴다"가 된다.
+ *
+ * 게다가 월봉 200개는 약 17년이라 20년치를 받아도 선이 몇 점 안 나오고,
+ * 화면 기간을 줄이면 아예 0점이 된다. 빈 차트는 사용자에게 '고장'으로 보인다.
+ */
+function viewNote(plot: SignalPlot, tfLabel: string, barCount: number): string {
+  const lines = [...plot.overlays, ...(plot.panes ?? (plot.pane ? [plot.pane] : [])).flatMap((p) => p.lines)];
+  const drawable = lines.filter((l) => l.data.length > 0);
+  const base = `차트만 ${tfLabel}으로 다시 계산한 선입니다. 성적표의 켜짐/꺼짐은 일봉 기준 그대로입니다.`;
+  if (!lines.length || drawable.length) return base;
+  return `${base} ${tfLabel} ${barCount}개로는 이 지표를 그릴 수 없습니다 — 일봉으로 보세요.`;
 }
 
 function maOn(ctx: Ctx, period: number, unit: string, color = C.amber): PlotLine {
@@ -760,7 +793,7 @@ function buildOn(key: string, bars: EnrichedBar[], unit: string): SignalPlot {
       return {
         ...none,
         overlays: [dated(bars, rollingMax(highs, look), `${look}봉 최고가`, C.amber, { width: 2 })],
-        rule: `종가가 ${look}봉 최고가에 닿으면 켜짐`,
+        rule: `그날 고가가 ${look}봉 최고가를 새로 찍으면 켜짐`,
       };
     }
     case "off_low_20": {

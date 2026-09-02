@@ -1,4 +1,5 @@
 import { json } from "@/lib/json-response";
+import { crossSiteDenied } from "@/lib/alerts/auth";
 import { AlertStoreError, alertsAvailable } from "@/lib/alerts/store";
 import {
   MAX_GRADE_TICKERS,
@@ -44,6 +45,9 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const offSite = crossSiteDenied(req);
+  if (offSite) return offSite;
+
   let body: { ticker?: unknown };
   try {
     body = (await req.json()) as typeof body;
@@ -65,6 +69,9 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  const offSite = crossSiteDenied(req);
+  if (offSite) return offSite;
+
   const raw = new URL(req.url).searchParams.get("ticker");
   if (!raw) return json({ error: "삭제할 종목을 지정해 주세요." }, { status: 400 });
   try {

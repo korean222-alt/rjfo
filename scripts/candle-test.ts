@@ -172,6 +172,92 @@ console.log("\n[2] 패턴 판정 (모양 + 앞선 추세)");
     "같은 봉이 하락장악형으로 세지지는 않는다",
   );
 
+  // '상승잉태 확인형'은 앞의 두 봉이 상승잉태형과 글자 그대로 같아야 한다.
+  // 안쪽 봉이 양봉이라는 조건을 확인형에서만 빼면 다른 패턴을 세게 되어,
+  // '확인을 붙이면 나아지는가'라는 비교 자체가 성립하지 않는다.
+  {
+    const three = barsFromCloses(down);
+    const big = three[39];
+    // 39: 큰 음봉으로 바꾼다 (몸통이 넉넉해야 안쪽 봉이 들어간다)
+    three[39] = {
+      date: dateAt(39),
+      open: big.close * 1.08,
+      high: big.close * 1.09,
+      low: big.close * 0.99,
+      close: big.close,
+      volume: 1_000_000,
+    };
+    const outer = three[39];
+    const mid = (outer.open + outer.close) / 2;
+    // 40: 바깥 몸통 안에 들어가는 작은 '음'봉 (잉태형이 아니다)
+    three[40] = {
+      date: dateAt(40),
+      open: mid * 1.005,
+      high: mid * 1.012,
+      low: mid * 0.995,
+      close: mid,
+      volume: 1_000_000,
+    };
+    // 41: 첫 봉 시가 위로 마감 = 확인
+    three[41] = {
+      date: dateAt(41),
+      open: mid,
+      high: outer.open * 1.03,
+      low: mid * 0.99,
+      close: outer.open * 1.02,
+      volume: 1_000_000,
+    };
+    const bear = buildPatterns(enrich(three));
+    assert(
+      bear.find((p) => p.key === "bull_harami")?.at[40] !== true,
+      "안쪽이 음봉이면 상승잉태형이 아니다 (전제 확인)",
+    );
+    assert(
+      bear.find((p) => p.key === "three_inside_up")?.at[41] !== true,
+      "잉태형이 아니면 '상승잉태 확인형'도 아니다",
+    );
+
+    // 안쪽 봉만 양봉으로 바꾸면 둘 다 잡혀야 한다.
+    three[40] = { ...three[40], open: mid * 0.995, close: mid * 1.005 };
+    const bull = buildPatterns(enrich(three));
+    assert(
+      bull.find((p) => p.key === "bull_harami")?.at[40] === true,
+      "안쪽이 양봉이면 상승잉태형",
+    );
+    assert(
+      bull.find((p) => p.key === "three_inside_up")?.at[41] === true,
+      "그 다음 날 첫 봉 시가를 넘으면 확인형",
+    );
+  }
+
+  // 앞선 추세는 '패턴이 완성되기 직전'까지의 값으로 재야 한다.
+  //
+  // 비교 대상인 20일선에 오늘 종가가 20분의 1 섞여 있으면, 오늘 봉이 자기 힘으로
+  // 선을 넘겨 자기 자신의 '앞선 추세'를 만들어낸다. 아래 두 시계열은 그게 갈리는
+  // 자리다 — 어제까지의 20일선은 정확히 종가와 같아서(100) 추세가 안 정해지는데,
+  // 오늘 한 봉이 크게 움직이면 20일선이 100을 넘거나 밑돌면서 분류가 뒤집힌다.
+  {
+    // 5일간 96→100으로 오르지만 종가는 20일선 위로 못 올라온 상태.
+    // 오늘 급락(60)이 20일선을 97.5로 끌어내리면 '상승 뒤'로 오분류된다.
+    const upTrap = [...Array(21).fill(110), ...Array(14).fill(100), 96, 97, 98, 99, 100, 60];
+    const crash = barsFromCloses(upTrap);
+    crash[40] = { date: dateAt(40), open: 61, high: 61.2, low: 40, close: 60, volume: 1_000_000 };
+    assert(
+      buildPatterns(enrich(crash)).find((p) => p.key === "hanging_man")?.at[40] !== true,
+      "오늘 급락이 20일선을 끌어내려도 '상승 뒤'가 되지 않는다 (교수형 아님)",
+    );
+
+    // 거울상: 5일간 104→100으로 내리지만 20일선 아래로는 안 내려온 상태.
+    // 오늘 급등(140)이 20일선을 102.5로 밀어 올리면 '하락 뒤'로 오분류된다.
+    const downTrap = [...Array(21).fill(90), ...Array(14).fill(100), 104, 103, 102, 101, 100, 140];
+    const pop = barsFromCloses(downTrap);
+    pop[40] = { date: dateAt(40), open: 141, high: 141.2, low: 120, close: 140, volume: 1_000_000 };
+    assert(
+      buildPatterns(enrich(pop)).find((p) => p.key === "hammer")?.at[40] !== true,
+      "오늘 급등이 20일선을 밀어 올려도 '하락 뒤'가 되지 않는다 (망치형 아님)",
+    );
+  }
+
   // 갭: 오늘 저가가 어제 고가보다 위.
   const gap = barsFromCloses(down);
   const g = gap[39].high * 1.02;

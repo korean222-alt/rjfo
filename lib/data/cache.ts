@@ -1,5 +1,6 @@
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGetOrNull, kvSet } from "@/lib/kv";
 import type { Bar } from "@/types";
+import { isCryptoTicker } from "./provider";
 
 /**
  * 일봉 캐시.
@@ -13,6 +14,14 @@ import type { Bar } from "@/types";
  */
 
 const FRESH_SECONDS = 12 * 60 * 60; // 12시간: 이 안이면 그냥 쓴다
+/**
+ * 코인은 더 짧게 본다.
+ *
+ * 코인 일봉은 UTC 자정에 마감된다. 12시간을 그대로 쓰면 마감 직전에 담긴 캐시가
+ * 다음 날 정오까지 살아 있어서, 이미 끝난 어제 봉이 빠진 채로 "지금 켜짐"을 판정한다.
+ * 주식은 하루 한 번만 갱신되므로 12시간이면 충분하다.
+ */
+const CRYPTO_FRESH_SECONDS = 3 * 60 * 60;
 const STALE_SECONDS = 7 * 24 * 60 * 60; // 7일: 외부 API가 죽었을 때만 쓰는 비상용
 
 type Envelope = { v: 1; savedAt: number; bars: Bar[] };
@@ -46,11 +55,11 @@ function keyFor(ticker: string, years?: number): string {
   return years == null ? `ohlcv:${ticker}` : `ohlcv:${ticker}:${years}y:${LONG_SCHEMA}`;
 }
 
-function toHit(env: Envelope | null): CacheHit | null {
+function toHit(env: Envelope | null, freshSeconds: number): CacheHit | null {
   if (!env || !Array.isArray(env.bars) || !env.bars.length) return null;
   const ageSec = (Date.now() - env.savedAt) / 1000;
   if (ageSec > STALE_SECONDS) return null;
-  return { bars: env.bars, fresh: ageSec <= FRESH_SECONDS };
+  return { bars: env.bars, fresh: ageSec <= freshSeconds };
 }
 
 /** 저장된 형태가 예전 버전(순수 배열)일 수도 있어서 둘 다 받아준다. */
@@ -68,15 +77,16 @@ function parseStored(raw: string): Envelope | null {
 
 export async function getCachedBars(ticker: string, years?: number): Promise<CacheHit | null> {
   const key = keyFor(ticker, years);
+  const freshSeconds = isCryptoTicker(ticker) ? CRYPTO_FRESH_SECONDS : FRESH_SECONDS;
 
-  // KV 장애는 치명적이지 않다 (kvGet이 null을 준다). 메모리 캐시로 폴백.
-  const raw = await kvGet(key);
+  // KV 장애는 치명적이지 않다 (kvGetOrNull이 null을 준다). 메모리 캐시로 폴백.
+  const raw = await kvGetOrNull(key);
   if (raw) {
-    const hit = toHit(parseStored(raw));
+    const hit = toHit(parseStored(raw), freshSeconds);
     if (hit) return hit;
   }
 
-  const hit = toHit(memory.get(key) ?? null);
+  const hit = toHit(memory.get(key) ?? null, freshSeconds);
   if (!hit) memory.delete(key);
   return hit;
 }

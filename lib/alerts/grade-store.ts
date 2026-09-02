@@ -1,4 +1,4 @@
-import { kvConfigured, kvGet, kvSet } from "@/lib/kv";
+import { KvUnavailableError, kvConfigured, kvGet, kvSet } from "@/lib/kv";
 import { AlertStoreError } from "./store";
 
 /**
@@ -8,7 +8,7 @@ import { AlertStoreError } from "./store";
  * 사람이 고르지 않는다 — 종목만 등록하면, 그 종목의 과거 사이클로 채점해서 여섯 관문을
  * 다 통과한(A등급) 신호가 새로 켜질 때만 알린다. 무엇을 볼지는 데이터가 정한다.
  *
- * 종목 수를 조금만 받는 이유: 한 종목당 20년치 일봉 + 지표 30개 + 조합 수십 개를
+ * 종목 수를 조금만 받는 이유: 한 종목당 20년치 일봉 + 지표 31개 + 조합 수십 개를
  * 채점하므로, 크론 함수 하나(60초) 안에 끝나야 한다.
  */
 
@@ -61,9 +61,19 @@ function parse(raw: string | null): GradeWatch[] {
   }
 }
 
+/** 읽기 실패를 빈 목록으로 흘리면 안 되는 이유는 store.ts의 listWatches 주석 참고. */
 export async function listGradeWatches(): Promise<GradeWatch[]> {
   requireKv();
-  return parse(await kvGet(KEY));
+  try {
+    return parse(await kvGet(KEY));
+  } catch (e) {
+    if (e instanceof KvUnavailableError) {
+      throw new AlertStoreError(
+        `알림 저장소를 읽지 못했습니다 (${e.message}) 등록된 종목이 지워지지 않도록 아무것도 바꾸지 않았습니다. 잠시 후 다시 시도해 주세요.`,
+      );
+    }
+    throw e;
+  }
 }
 
 async function save(watches: GradeWatch[]): Promise<void> {

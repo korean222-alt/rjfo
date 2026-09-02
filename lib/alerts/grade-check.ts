@@ -1,5 +1,6 @@
 import { MAX_YEARS, loadBars } from "@/lib/data";
 import { attachFunding } from "@/lib/data/funding";
+import { dropIncompleteBar } from "@/lib/data/market-clock";
 import { enrich } from "@/lib/indicators";
 import { analyzeCycle } from "@/lib/cycle";
 import { TelegramError, sendTelegram } from "./telegram";
@@ -34,7 +35,9 @@ export async function runGradeCheck(watches: GradeWatch[]): Promise<GradeCheckRe
     const ticker = watch.ticker;
     try {
       const raw = await loadBars(ticker, { years: MAX_YEARS, forceFresh: true });
-      const bars = await attachFunding(ticker, raw);
+      // 아직 안 끝난 오늘 봉으로 채점하면 장중 값으로 A등급 알림이 나간다.
+      // 거래량 알림(checkLatest)과 같은 기준을 쓴다.
+      const bars = dropIncompleteBar(ticker, await attachFunding(ticker, raw));
       if (bars.length < MIN_BARS) {
         notes.push(`${ticker}: 일봉 ${bars.length}개뿐이라 사이클 채점을 못 함`);
         continue;

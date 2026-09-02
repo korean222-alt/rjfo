@@ -767,6 +767,12 @@ export default function CyclePage() {
                           : ""}
                       </>
                     ) : null}
+                    {plot?.note ? (
+                      <>
+                        <br />
+                        <b className="text-amber-300">{plot.note}</b>
+                      </>
+                    ) : null}
                   </p>
                 ) : (
                   <p className="mt-2 px-0.5 text-[11px] text-muted">

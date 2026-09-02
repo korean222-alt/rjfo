@@ -364,9 +364,13 @@ export function buildSignals(bars: EnrichedBar[]): SignalSeries[] {
   // ── 가격 구조 ────────────────────────────────────────────────────
   const high52 = rollingMax(highs, 252);
   const low52 = rollingMin(lows, 252);
+  // 신고가는 고가끼리 비교한다. 종가와 비교하면(예전 코드) 그날 윗꼬리가 조금만 있어도
+  // 고가 > 종가라서 '진짜 신고가를 찍은 날'이 꺼진 채로 남았다. 0.999 여유로는
+  // 0.1% 꼬리까지밖에 못 덮는다. high52는 오늘 고가를 포함한 252일 최고가이므로,
+  // 이 조건은 "오늘 고가가 그 창의 최고가"와 정확히 같다.
   push(
     { key: "high_52w", label: "52주 신고가", group: "가격구조", why: "신고가는 그 자체로 강세장의 정의에 가깝다", timeframe: "일봉" },
-    bars.map((b, i) => (high52[i] == null ? null : b.close >= high52[i]! * 0.999)),
+    bars.map((b, i) => (high52[i] == null ? null : b.high >= high52[i]!)),
   );
   push(
     { key: "off_low_20", label: "52주 저점 +20%", group: "가격구조", why: "저점 대비 20% 상승 — 강세장의 교과서적 정의", timeframe: "일봉" },

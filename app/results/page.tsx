@@ -102,12 +102,15 @@ export default function ResultsPage() {
     async (next: boolean) => {
       if (!result) return;
       setBusy(true);
+      setEditorError(null);
       try {
         const data = await runAnalyze(result.ticker, result.spec, { cluster: next });
         saveAnalysis(data);
         setPayload(data);
         setCluster(next);
-      } catch {
+      } catch (e) {
+        // 삼키면 스위치만 조용히 제자리로 돌아가서 "토글이 안 먹는다"로 보인다.
+        setEditorError((e as Error).message);
       } finally {
         setBusy(false);
       }

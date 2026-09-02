@@ -1,4 +1,4 @@
-import { kvConfigured, kvGet, kvSet } from "@/lib/kv";
+import { KvUnavailableError, kvConfigured, kvGet, kvSet } from "@/lib/kv";
 import type { MaParams } from "@/lib/ma";
 import { findChip, normalizeMaParams, type SignalKey } from "@/lib/presets";
 
@@ -76,9 +76,25 @@ function parse(raw: string | null): Watch[] {
   }
 }
 
+/**
+ * 저장소를 못 읽었으면 빈 목록이 아니라 에러다.
+ *
+ * 이 목록은 항상 '읽고 → 고쳐서 → 통째로 다시 쓴다'. 장애를 빈 목록으로 읽으면
+ * 바로 다음 save()가 등록해 둔 알림을 전부 지운다. 중복 방지용 lastNotifiedDate까지
+ * 같이 날아가서 이미 보낸 알림이 다시 간다. 읽기 실패는 반드시 여기서 멈춰야 한다.
+ */
 export async function listWatches(): Promise<Watch[]> {
   requireKv();
-  return parse(await kvGet(KEY));
+  try {
+    return parse(await kvGet(KEY));
+  } catch (e) {
+    if (e instanceof KvUnavailableError) {
+      throw new AlertStoreError(
+        `알림 저장소를 읽지 못했습니다 (${e.message}) 등록된 목록이 지워지지 않도록 아무것도 바꾸지 않았습니다. 잠시 후 다시 시도해 주세요.`,
+      );
+    }
+    throw e;
+  }
 }
 
 async function save(watches: Watch[]): Promise<void> {

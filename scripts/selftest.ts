@@ -10,6 +10,8 @@ import { enrich } from "../lib/indicators";
 import { applyFilter, clusterIndices } from "../lib/filter";
 import { analyze, forwardReturn, maxForwardReturn } from "../lib/stats";
 import { checkLatest, formatAlert } from "../lib/alerts/evaluate";
+import { AlertStoreError, addWatch, listWatches, markNotified } from "../lib/alerts/store";
+import { isIncompleteBar } from "../lib/data/market-clock";
 import { mergeOlderHistory, toUniqueBars } from "../lib/data/crypto";
 import { binomTailGe } from "../lib/cycle/evaluate";
 import { assessPosition, onRuns } from "../lib/cycle/position";
@@ -119,8 +121,16 @@ console.log("\n[1] 파생 지표");
   assert(e[19].vol_ma20 !== null, "20번째 봉부터 vol_ma20 계산됨");
   assert(e[58].volume_zscore_60d === null, "60봉 미만 zscore = null");
 
-  // 계속 상승하는 시계열 → 상승일 거래량만 존재 → up/down 비율은 null (하락일 없음)
-  assert(e[100].up_down_vol_ratio_20d === null, "하락일 0일 때 up_down_vol_ratio = null");
+  // 계속 상승하는 시계열 → 하락일 거래량이 0 → 비율은 무한대(가장 강한 매수 우위).
+  // null로 두면 '상승 거래량 우위' 신호가 이 구간에서만 조용히 빠진다.
+  assert(
+    e[100].up_down_vol_ratio_20d === Number.POSITIVE_INFINITY,
+    "하락일 0일 때 up_down_vol_ratio = ∞ (신호가 켜져야 한다)",
+  );
+  assert(
+    e[100].up_down_vol_ratio_20d != null && e[100].up_down_vol_ratio_20d > 1.2,
+    "하락일 0일 때 '상승 거래량 우위' 조건을 만족한다",
+  );
   // OBV는 전부 상승일이므로 누적 = 거래량 합
   approx(e[5].obv, 5_000_000, 1e-6, "obv (5봉 연속 상승)");
 
@@ -329,16 +339,51 @@ console.log("\n[8] 알림 판정 (마지막 봉)");
     "알림 메시지에 티커와 날짜가 들어감",
   );
 
+  // 마감 전 봉으로 판정하면 장중 값으로 알림이 나간다. 시장별 마감 시각으로 가른다.
+  // 시각에 따라 결과가 갈리는 판정이라 now를 고정해서 검산한다.
+  //
+  // 2026-03-10은 화요일. 미국은 이미 서머타임(EDT, UTC-4), 한국은 연중 UTC+9.
+  assert(
+    isIncompleteBar("BTC-USD", "2026-03-10", new Date("2026-03-10T23:59:00Z")),
+    "코인: UTC 오늘 봉은 끝까지 진행 중",
+  );
+  assert(
+    !isIncompleteBar("BTC-USD", "2026-03-09", new Date("2026-03-10T00:01:00Z")),
+    "코인: UTC 어제 봉은 마감됨",
+  );
+  assert(
+    isIncompleteBar("AAPL", "2026-03-10", new Date("2026-03-10T18:00:00Z")),
+    "미국: 14:00 ET(장중)에는 오늘 봉이 진행 중",
+  );
+  assert(
+    !isIncompleteBar("AAPL", "2026-03-10", new Date("2026-03-10T21:00:00Z")),
+    "미국: 17:00 ET(마감 후)에는 오늘 봉을 쓴다",
+  );
+  assert(
+    isIncompleteBar("005930.KS", "2026-03-10", new Date("2026-03-10T02:00:00Z")),
+    "한국: 11:00 KST(장중)에는 오늘 봉이 진행 중",
+  );
+  assert(
+    !isIncompleteBar("005930.KS", "2026-03-10", new Date("2026-03-10T07:00:00Z")),
+    "한국: 16:00 KST(마감 후)에는 오늘 봉을 쓴다",
+  );
+
+  // 어제 이전 날짜의 봉은 어느 시장이든 이미 마감이므로 그대로 판정한다.
+  const settled = "2020-01-02";
+  const stockSettled = enrich([
+    ...fixture().slice(0, 80),
+    { date: settled, open: 100, high: 102, low: 99, close: 101, volume: 5_000_000 },
+  ]);
+  assert(
+    checkLatest(stockSettled, "volume_spike", null, "AAPL")?.bar.date === settled,
+    "주식 알림은 마감된 봉을 그대로 본다",
+  );
+
   const today = new Date().toISOString().slice(0, 10);
   const stockToday = enrich([
     ...fixture().slice(0, 80),
     { date: today, open: 100, high: 102, low: 99, close: 101, volume: 5_000_000 },
   ]);
-  const stockHit = checkLatest(stockToday, "volume_spike", null, "AAPL");
-  assert(
-    stockHit?.bar.date === today,
-    "주식 알림은 오늘(장 마감) 봉을 본다",
-  );
   const cryptoHit = checkLatest(stockToday, "volume_spike", null, "BTC-USD");
   assert(
     cryptoHit == null || cryptoHit.bar.date !== today,
@@ -491,9 +536,61 @@ console.log("\n[11] 지금 위치 — 켜진 구간과 반납폭");
   assert(pos.stage === "판정불가", `진행도를 못 재면 단계는 판정불가 (${pos.stage})`);
 }
 
-console.log(
-  failures === 0
-    ? "\n✅ 전부 통과\n"
-    : `\n❌ ${failures}개 실패\n`,
-);
-process.exit(failures === 0 ? 0 : 1);
+// ── [N] 저장소 장애가 워치리스트를 지우지 않는지 ──────────────────
+//
+// 이 목록은 항상 '읽고 → 고쳐서 → 통째로 다시 쓴다'. KV 읽기 실패를 '키가 없음'으로
+// 읽으면 바로 다음 저장이 등록해 둔 알림을 전부 지운다. 중복 방지 기록까지 같이
+// 날아가서 이미 보낸 알림이 다시 간다. 그래서 읽기 실패는 반드시 예외여야 한다.
+console.log("\n[10] KV 장애 시 워치리스트 보호");
+void (async () => {
+  const saved = { ...process.env };
+  // 아무도 안 듣는 포트. 연결 자체가 즉시 실패한다 (네트워크 없이 결정론적).
+  process.env.KV_REST_API_URL = "http://127.0.0.1:1";
+  process.env.KV_REST_API_TOKEN = "x";
+
+  const writes: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/set/")) writes.push(url);
+    return realFetch(input as RequestInfo, init);
+  }) as typeof fetch;
+
+  try {
+    let threw = false;
+    try {
+      await listWatches();
+    } catch (e) {
+      threw = e instanceof AlertStoreError;
+    }
+    assert(threw, "읽기 실패는 빈 목록이 아니라 에러");
+
+    let addThrew = false;
+    try {
+      await addWatch("AAPL", "volume_spike");
+    } catch (e) {
+      addThrew = e instanceof AlertStoreError;
+    }
+    assert(addThrew, "읽기 실패 상태에서는 등록도 실패한다");
+
+    let markThrew = false;
+    try {
+      await markNotified([{ id: "x", date: "2026-01-01" }]);
+    } catch (e) {
+      markThrew = e instanceof AlertStoreError;
+    }
+    assert(markThrew, "읽기 실패 상태에서는 알림 기록도 실패한다");
+
+    assert(writes.length === 0, "읽기 실패 뒤에는 아무것도 저장하지 않는다");
+  } finally {
+    globalThis.fetch = realFetch;
+    process.env = saved;
+  }
+
+  console.log(
+    failures === 0
+      ? "\n✅ 전부 통과\n"
+      : `\n❌ ${failures}개 실패\n`,
+  );
+  process.exit(failures === 0 ? 0 : 1);
+})();

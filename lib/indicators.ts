@@ -116,7 +116,11 @@ export function enrich(bars: Bar[]): EnrichedBar[] {
         if (bars[k].close > p) upVol += bars[k].volume;
         else if (bars[k].close < p) downVol += bars[k].volume;
       }
-      up_down_vol_ratio_20d = downVol > 0 ? upVol / downVol : null;
+      // 하락일 거래량이 0이면(20일 내내 오르기만 한 구간) 비율은 무한대다.
+      // 이걸 null로 두면 매수 우위가 가장 강한 자리에서 신호가 워밍업처럼 빠지고,
+      // 첫 음봉이 나온 다음에야 켜진다. 값을 못 재는 건 위아래 둘 다 없을 때뿐이다.
+      up_down_vol_ratio_20d =
+        downVol > 0 ? upVol / downVol : upVol > 0 ? Number.POSITIVE_INFINITY : null;
     }
 
     const rawSlope = regressionSlope(obv, i, 20);

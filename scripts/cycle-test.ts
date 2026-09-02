@@ -27,6 +27,7 @@ import { toMonthly, toWeekly, projectToDaily, barsForView, snapDatesToView } fro
 import { ema, macd, rsi, sma } from "../lib/cycle/ta";
 import { narrate } from "../lib/cycle/narrative";
 import { alignToDates, plotForSignal, plotForView } from "../lib/cycle/plot";
+import { toChartSeries } from "../lib/cycle/series";
 import { buildSignals } from "../lib/cycle/signals";
 import { toTradingViewSymbol } from "../lib/tradingview";
 import type { Bar } from "../types";
@@ -1193,6 +1194,102 @@ console.log("\n[17] 펀딩비 지표 · 부분 히스토리 채점");
     noFunding.funding.days === 0 && noFunding.funding.signals === 0,
     "펀딩이 없으면 0/0으로 실린다",
   );
+}
+
+// ── 18b. 차트 시계열이 펀딩비를 빠뜨리지 않는지 ────────────────────
+//
+// 서버는 펀딩으로 채점해서 성적표에 3개를 올리는데, 차트로 보내는 시계열에서
+// funding을 빼면 브라우저가 그 시세로 지표를 다시 만들면서 펀딩 패널만 텅 빈다.
+// 성적표에는 값이 멀쩡히 있어서 원인을 찾기가 유난히 어려웠던 버그다.
+console.log("\n[18b] 차트 시계열 왕복 (펀딩비)");
+{
+  const closes = Array.from({ length: 400 }, (_, i) => 100 + Math.sin(i / 20) * 10 + i * 0.05);
+  const withFunding: Bar[] = barsFromCloses(closes).map((b, i) => ({
+    ...b,
+    funding: i < 100 ? null : (i % 7 === 0 ? -0.0002 : 0.0001),
+  }));
+
+  const series = toChartSeries(enrich(withFunding));
+  assert(
+    series.some((b) => b.funding != null),
+    "차트 시계열에 funding이 실린다",
+  );
+  assert(
+    series.slice(0, 100).every((b) => b.funding == null),
+    "값이 없던 구간은 실리지 않는다 (없는 값을 0으로 채우지 않는다)",
+  );
+
+  // 브라우저가 하는 일 그대로: 받은 시세에 같은 enrich()를 다시 돌린다.
+  const redrawn = enrich(series);
+  const original = enrich(withFunding);
+  const i = 200;
+  approx(
+    redrawn[i].funding_pct,
+    original[i].funding_pct ?? 0,
+    1e-9,
+    "브라우저가 다시 계산한 funding_pct가 서버와 같다 (100배가 되지 않는다)",
+  );
+  assert(
+    plotForSignal("fund_neg", redrawn).pane?.lines.some((l) => l.data.length > 0) === true,
+    "펀딩 패널에 실제로 선이 그려진다",
+  );
+}
+
+// ── 19. 신고가 판정과 주/월 보기 경고 ─────────────────────────────
+console.log("\n[19] 52주 신고가 · 주월 보기 경고");
+{
+  // 신고가를 찍은 날에 윗꼬리가 달리면, 종가는 그날 고가보다 낮다. 예전 코드는
+  // 종가를 252일 최고'가'와 비교해서, 진짜 신고가 날이 꺼진 채로 남았다.
+  const closes = Array.from({ length: 300 }, (_, i) => 100 + i * 0.1);
+  const bars: Bar[] = closes.map((c, i) => ({
+    date: dateAt(i),
+    open: c,
+    high: c * 1.005,
+    low: c * 0.995,
+    close: c,
+    volume: 1_000_000,
+  }));
+  // 마지막 봉: 종가는 전날과 같지만 장중에 크게 위를 찔렀다 = 그날이 52주 신고가.
+  const last = bars.length - 1;
+  bars[last] = { ...bars[last], close: closes[last - 1], high: closes[last] * 1.05 };
+
+  const high52 = buildSignals(enrich(bars)).find((s) => s.key === "high_52w");
+  assert(high52 != null, "52주 신고가 지표가 만들어진다");
+  assert(high52?.state[last] === true, "윗꼬리로 신고가를 찍은 날도 켜진다");
+
+  // 신고가를 못 찍은 날(창 안 최고가보다 낮음)은 꺼져 있어야 한다.
+  const flat: Bar[] = closes.map((c, i) => ({
+    date: dateAt(i),
+    open: c,
+    high: i === closes.length - 1 ? c : c * 1.02,
+    low: c * 0.995,
+    close: c,
+    volume: 1_000_000,
+  }));
+  const flatState = buildSignals(enrich(flat)).find((s) => s.key === "high_52w")?.state ?? [];
+  assert(flatState[flat.length - 1] === false, "창 안 최고가에 못 미친 날은 꺼짐");
+
+  // 월봉 200개(≈17년)는 20년치를 받아도 거의 안 그려진다. 빈 차트를 그냥 보여주면
+  // 사용자는 '지표가 고장났다'고 읽으므로, 못 그린다는 사실을 화면에 적어야 한다.
+  const short = barsFromCloses(Array.from({ length: 600 }, (_, i) => 100 + i));
+  const monthly = plotForView("ma200", enrich(short), "1M");
+  assert(
+    monthly.overlays.every((l) => l.data.length === 0),
+    "월봉 200개월선은 600일치로 그릴 수 없다 (전제 확인)",
+  );
+  assert(
+    (monthly.note ?? "").includes("그릴 수 없습니다"),
+    "그릴 수 없으면 그렇다고 화면에 적는다",
+  );
+
+  // 그려지는 경우에도 '차트만 다시 계산한 것'이라는 사실은 남아야 한다.
+  const weekly = plotForView("ma50", enrich(short), "1w");
+  assert(weekly.overlays.some((l) => l.data.length > 0), "주봉 50주선은 그려진다");
+  assert(
+    (weekly.note ?? "").includes("성적표의 켜짐/꺼짐은 일봉 기준"),
+    "주/월 보기는 성적표와 기준이 다르다고 적는다",
+  );
+  assert(plotForView("ma50", enrich(short), "1d").note == null, "일봉 보기에는 경고가 없다");
 }
 
 // ── 18. 실데이터 (인자로 티커를 주면) ─────────────────────────────

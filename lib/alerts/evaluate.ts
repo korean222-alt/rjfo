@@ -1,7 +1,7 @@
 import { applyFilter } from "@/lib/filter";
 import { compactNumber } from "@/lib/format";
 import { specForSignal, type SignalKey } from "@/lib/presets";
-import { isCryptoTicker } from "@/lib/data/provider";
+import { isIncompleteBar } from "@/lib/data/market-clock";
 import type { MaParams } from "@/lib/ma";
 import type { EnrichedBar } from "@/types";
 
@@ -10,10 +10,6 @@ export type SignalHit = {
   label: string;
   bar: EnrichedBar;
 };
-
-function utcToday(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 export function checkLatest(
   bars: EnrichedBar[],
@@ -26,10 +22,10 @@ export function checkLatest(
   if (!bars.length) return null;
 
   let last = bars.length - 1;
-  // 코인만 오늘 UTC 봉이 아직 진행 중이다. 미국/한국 주식은 장 마감 크론
-  // 시점(22:00 UTC)에 오늘 봉이 이미 완성되어 있으므로 건너뛰면 하루 늦는다.
-  const skipIncomplete = !ticker || isCryptoTicker(ticker);
-  if (skipIncomplete && bars[last].date === utcToday() && last > 0) last -= 1;
+  // 아직 안 끝난 날의 봉으로 신호를 판정하면 장중 값으로 알림이 나가고, 종가가
+  // 뒤집히면 없던 신호를 보낸 셈이 된다. 시장별 마감 시각으로 판정한다
+  // (코인 UTC 자정 / KRX 15:30 / 미국 16:00 — lib/data/market-clock.ts).
+  if (ticker && last > 0 && isIncompleteBar(ticker, bars[last].date)) last -= 1;
   const matched = applyFilter(bars, spec).includes(last);
   return matched ? { signal, label: spec.interpretation, bar: bars[last] } : null;
 }

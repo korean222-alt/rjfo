@@ -1,5 +1,6 @@
 import { json } from "@/lib/json-response";
-import { alertsAvailable } from "@/lib/alerts/store";
+import { cronDenied, crossSiteDenied } from "@/lib/alerts/auth";
+import { AlertStoreError, alertsAvailable } from "@/lib/alerts/store";
 import { listGradeWatches } from "@/lib/alerts/grade-store";
 import { runGradeCheck } from "@/lib/alerts/grade-check";
 import { telegramReady } from "@/lib/alerts/telegram";
@@ -7,7 +8,7 @@ import { normalizeTicker } from "@/lib/data/provider";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// 종목마다 20년치 일봉을 받아 지표 30개 + 조합 수십 개를 채점한다.
+// 종목마다 20년치 일봉을 받아 지표 31개 + 조합 수십 개를 채점한다.
 export const maxDuration = 60;
 
 function guard(): Response | null {
@@ -25,15 +26,20 @@ function guard(): Response | null {
 
 /** 크론용. 등록된 종목 전부를 돈다. */
 export async function GET(req: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (secret && req.headers.get("authorization") !== `Bearer ${secret}`) {
-    return json({ error: "권한이 없습니다." }, { status: 401 });
-  }
+  const denied = cronDenied(req);
+  if (denied) return denied;
 
   const blocked = guard();
   if (blocked) return blocked;
 
-  const watches = await listGradeWatches();
+  // 저장소를 못 읽었으면 여기서 멈춘다 (markGradeNotified가 빈 목록을 덮어쓰지 않도록).
+  let watches;
+  try {
+    watches = await listGradeWatches();
+  } catch (e) {
+    const msg = e instanceof AlertStoreError ? e.message : (e as Error).message;
+    return json({ error: msg }, { status: 503 });
+  }
   if (!watches.length) {
     return json({ checked: 0, sent: 0, notes: ["등록된 A등급 알림이 없습니다."] });
   }
@@ -47,6 +53,9 @@ export async function GET(req: Request) {
  * 한 번에 한 종목으로 제한한다. 조건·중복 판정은 크론과 같은 코드(runGradeCheck)다.
  */
 export async function POST(req: Request) {
+  const offSite = crossSiteDenied(req);
+  if (offSite) return offSite;
+
   const blocked = guard();
   if (blocked) return blocked;
 
@@ -58,7 +67,13 @@ export async function POST(req: Request) {
   }
 
   const ticker = normalizeTicker(typeof body.ticker === "string" ? body.ticker : "");
-  const watches = await listGradeWatches();
+  let watches;
+  try {
+    watches = await listGradeWatches();
+  } catch (e) {
+    const msg = e instanceof AlertStoreError ? e.message : (e as Error).message;
+    return json({ error: msg }, { status: 503 });
+  }
   const target = watches.filter((w) => (ticker ? w.ticker === ticker : true)).slice(0, 1);
   if (!target.length) {
     return json({ error: "등록된 종목이 아닙니다." }, { status: 400 });

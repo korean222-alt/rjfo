@@ -1,6 +1,13 @@
 import { json } from "@/lib/json-response";
+import { cronDenied } from "@/lib/alerts/auth";
 import { checkLatest, formatAlert, type SignalHit } from "@/lib/alerts/evaluate";
-import { alertsAvailable, listWatches, markNotified, type Watch } from "@/lib/alerts/store";
+import {
+  AlertStoreError,
+  alertsAvailable,
+  listWatches,
+  markNotified,
+  type Watch,
+} from "@/lib/alerts/store";
 import { TelegramError, sendTelegram, telegramReady } from "@/lib/alerts/telegram";
 import { loadBars } from "@/lib/data";
 import { attachFunding } from "@/lib/data/funding";
@@ -11,10 +18,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET(req: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (secret && req.headers.get("authorization") !== `Bearer ${secret}`) {
-    return json({ error: "권한이 없습니다." }, { status: 401 });
-  }
+  const denied = cronDenied(req);
+  if (denied) return denied;
 
   if (!alertsAvailable()) {
     return json({ error: "알림 저장소(KV)가 설정되지 않았습니다." }, { status: 503 });
@@ -26,7 +31,14 @@ export async function GET(req: Request) {
     );
   }
 
-  const watches = await listWatches();
+  // 저장소를 못 읽었으면 여기서 멈춘다. 계속 진행하면 markNotified가 빈 목록을 덮어쓴다.
+  let watches: Watch[];
+  try {
+    watches = await listWatches();
+  } catch (e) {
+    const msg = e instanceof AlertStoreError ? e.message : (e as Error).message;
+    return json({ error: msg }, { status: 503 });
+  }
   if (!watches.length) return json({ checked: 0, sent: 0, notes: ["등록된 알림이 없습니다."] });
 
   const byTicker = new Map<string, Watch[]>();

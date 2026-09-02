@@ -72,19 +72,46 @@ export function kvConfigured(): boolean {
   return config() !== null;
 }
 
-/** 값이 없거나 KV가 없으면 null. KV 장애는 예외 대신 null로 흘린다. */
+/** KV에 못 닿았다. '키가 없다'와 반드시 구분해야 하는 상황. */
+export class KvUnavailableError extends Error {}
+
+/**
+ * 키를 읽는다. 값이 없으면 null.
+ *
+ * 장애(타임아웃·5xx·네트워크)는 null이 아니라 예외로 던진다. 둘을 같은 null로
+ * 뭉개면 호출자가 "키가 없다"로 읽고, 워치리스트처럼 읽고-고쳐-쓰는 값은
+ * 빈 목록으로 저장되어 등록해 둔 알림이 통째로 날아간다. KV가 3초 죽은 것과
+ * 사용자가 아무것도 등록하지 않은 것은 다른 사건이다.
+ */
 export async function kvGet(key: string): Promise<string | null> {
   const kv = config();
   if (!kv) return null;
+  let res: Response;
   try {
-    const res = await fetch(`${kv.url}/get/${encodeURIComponent(key)}`, {
+    res = await fetch(`${kv.url}/get/${encodeURIComponent(key)}`, {
       headers: { Authorization: `Bearer ${kv.token}` },
       cache: "no-store",
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-    if (!res.ok) return null;
+  } catch (e) {
+    throw new KvUnavailableError(`저장소에 연결하지 못했습니다: ${(e as Error).message}`);
+  }
+  if (!res.ok) throw new KvUnavailableError(`저장소 오류 (HTTP ${res.status}).`);
+  try {
     const body = (await res.json()) as { result: string | null };
     return body.result ?? null;
+  } catch (e) {
+    throw new KvUnavailableError(`저장소 응답을 읽지 못했습니다: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * 캐시처럼 '없으면 그냥 다시 받으면 되는' 값 전용. 장애도 null로 흘린다.
+ * 읽고-고쳐-쓰는 값에는 절대 쓰지 말 것 (위 kvGet 주석 참고).
+ */
+export async function kvGetOrNull(key: string): Promise<string | null> {
+  try {
+    return await kvGet(key);
   } catch {
     return null;
   }

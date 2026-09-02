@@ -55,6 +55,12 @@ export async function GET(req: Request) {
   const fundingSupported = fundingInstrument(ticker) != null;
   const funding = fundingSupported ? await probeFundingSources(ticker) : [];
   const fundingBest = funding.reduce<number>((m, f) => Math.max(m, f.days), 0);
+  // 바이낸스는 2019-09부터 있어서 다른 소스(MEXC 800일, OKX 400일)와 길이가 다르다.
+  // 미국 리전에서는 지역 제한(HTTP 451)으로 막히는데, 그러면 사이클을 못 덮어 등급이
+  // 전부 D로 떨어진다. 원인을 여기서 이름 붙여 주지 않으면 화면에는 '데이터 없음'만 남는다.
+  const binanceBlocked = funding.some(
+    (f) => f.source === "binance" && !f.ok && /451/.test(f.error ?? ""),
+  );
 
   return json({
     ticker,
@@ -76,6 +82,13 @@ export async function GET(req: Request) {
       sources: funding,
       // 지표가 화면에 뜨려면 최소 이만큼은 있어야 한다(60일 z-점수 + 사이클 한 번).
       bestDays: fundingBest,
+      binanceBlocked,
+      binanceHint: binanceBlocked
+        ? "바이낸스가 HTTP 451(지역 제한)로 막혔습니다 — 배포 리전이 미국이면 항상 이렇습니다. " +
+          "Vercel 프로젝트 Settings → Functions에서 리전을 서울(icn1)이나 프랑크푸르트(fra1)로 바꾸면 " +
+          "2019-09부터의 펀딩비가 들어와 펀딩 지표 3개가 실제로 채점됩니다. " +
+          "지금은 MEXC·OKX의 짧은 히스토리만 쓰고 있어 사이클을 거의 못 덮습니다."
+        : null,
       hint: !fundingSupported
         ? "이 티커는 펀딩비 대상이 아닙니다 (주식이거나 목록에 없는 코인). 펀딩 지표 3개가 안 뜨는 게 정상입니다."
         : fundingBest === 0

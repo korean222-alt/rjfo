@@ -153,10 +153,13 @@ export function buildPatterns(bars: EnrichedBar[]): PatternSeries[] {
   const downBefore: boolean[] = new Array(n).fill(false);
   const upBefore: boolean[] = new Array(n).fill(false);
   for (let i = 5; i < n; i++) {
-    const m = ma20[i];
-    if (m == null) continue;
     // 판정 시점은 '패턴이 완성되기 직전'이다. 오늘 종가로 추세를 재면
     // 오늘 크게 오른 봉이 '상승 추세 뒤'가 되어 버려서 순환 논리가 된다.
+    // 비교 대상인 이평도 어제까지의 값(ma20[i-1])이어야 한다 — ma20[i]에는
+    // 오늘 종가가 20분의 1 섞여 있어서, 장대양봉이 선을 밀어 올리면
+    // '하락 뒤 망치형'이 조용히 빠진다.
+    const m = ma20[i - 1];
+    if (m == null) continue;
     const prev = bars[i - 1].close;
     downBefore[i] = prev < bars[i - 5].close && prev < m;
     upBefore[i] = prev > bars[i - 5].close && prev > m;
@@ -617,12 +620,16 @@ export function buildPatterns(bars: EnrichedBar[]): PatternSeries[] {
       rule: "상승잉태형 + 다음 날 종가가 잉태 첫 봉의 시가 위",
       needsTrend: true,
     },
+    // 앞의 두 봉은 bull_harami와 글자 그대로 같은 조건이어야 한다. 안쪽 봉이
+    // 양봉이라는 조건을 여기서만 빼면 '상승잉태형 + 확인'이 아니라 다른 패턴을
+    // 세게 되고, 확인을 붙이면 나아지는지 비교하려던 목적 자체가 깨진다.
     (i) => {
       const a = i - 2;
       const b = i - 1;
       return (
         downBefore[b] &&
         !s[a].bullish &&
+        s[b].bullish &&
         s[b].top <= s[a].top &&
         s[b].bottom >= s[a].bottom &&
         s[a].body > s[b].body * 2 &&

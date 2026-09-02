@@ -56,7 +56,16 @@ export async function askCycle(question: string, facts: string): Promise<CycleAn
 const longBars = new Map<string, Bar[]>();
 
 function isQuoteSourceFailure(status: number): boolean {
-  return status === 404 || status === 408 || status === 429 || status >= 500;
+  // 403/401도 포함한다. Yahoo는 데이터센터 IP를 429가 아니라 403으로 막을 때가 있는데,
+  // 그러면 브라우저로 다시 받아오는 경로(사용자 IP는 안 막힌다)를 아예 안 탔다.
+  return (
+    status === 401 ||
+    status === 403 ||
+    status === 404 ||
+    status === 408 ||
+    status === 429 ||
+    status >= 500
+  );
 }
 
 async function readJson(res: Response): Promise<Partial<CyclePayload> & { error?: string }> {

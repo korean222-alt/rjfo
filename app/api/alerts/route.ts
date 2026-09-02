@@ -1,4 +1,5 @@
 import { json } from "@/lib/json-response";
+import { crossSiteDenied } from "@/lib/alerts/auth";
 import { AlertStoreError, addWatch, alertsAvailable, listWatches, removeWatch } from "@/lib/alerts/store";
 import { telegramStatus } from "@/lib/alerts/telegram";
 import { kvSource } from "@/lib/kv";
@@ -67,6 +68,9 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const offSite = crossSiteDenied(req);
+  if (offSite) return offSite;
+
   let body: { ticker?: unknown; signal?: unknown; params?: unknown };
   try {
     body = (await req.json()) as typeof body;
@@ -93,6 +97,9 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  const offSite = crossSiteDenied(req);
+  if (offSite) return offSite;
+
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return json({ error: "삭제할 알림을 지정해 주세요." }, { status: 400 });
   try {

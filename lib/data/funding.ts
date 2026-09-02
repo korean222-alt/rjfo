@@ -1,5 +1,5 @@
 import type { Bar } from "@/types";
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGetOrNull, kvSet } from "@/lib/kv";
 import { DataProviderError, isCryptoTicker } from "./provider";
 
 /**
@@ -162,7 +162,7 @@ export async function loadDailyFunding(ticker: string): Promise<Map<string, numb
   if (!inst) return new Map();
 
   const cacheKey = `funding:${ticker}`;
-  const cached = await kvGet(cacheKey);
+  const cached = await kvGetOrNull(cacheKey);
   if (cached) {
     try {
       const parsed = JSON.parse(cached) as Array<[string, number]>;
