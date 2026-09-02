@@ -1,6 +1,7 @@
 import { json } from "@/lib/json-response";
 import { getProviders } from "@/lib/data";
 import { DataProviderError, isValidTicker, normalizeTicker } from "@/lib/data/provider";
+import { fundingInstrument, probeFundingSources } from "@/lib/data/funding";
 import { kvConfigured, kvSource } from "@/lib/kv";
 
 export const runtime = "nodejs";
@@ -49,6 +50,12 @@ export async function GET(req: Request) {
 
   const primary = sources[0];
 
+  // 코인이면 펀딩비 소스도 같이 본다. 펀딩 지표 3개가 화면에 안 뜨는 이유는
+  // 거의 항상 여기 있는데, 화면만 봐서는 소스가 막힌 건지 원래 없는 건지 알 수 없다.
+  const fundingSupported = fundingInstrument(ticker) != null;
+  const funding = fundingSupported ? await probeFundingSources(ticker) : [];
+  const fundingBest = funding.reduce<number>((m, f) => Math.max(m, f.days), 0);
+
   return json({
     ticker,
     // 실제로 어떤 순서로 시도하는지. 여기에 twelvedata가 없으면 키가 함수에 안 들어온 것이다.
@@ -64,6 +71,19 @@ export async function GET(req: Request) {
       hasTwelveDataKey: Boolean(process.env.TWELVE_DATA_API_KEY),
     },
     sources,
+    funding: {
+      supported: fundingSupported,
+      sources: funding,
+      // 지표가 화면에 뜨려면 최소 이만큼은 있어야 한다(60일 z-점수 + 사이클 한 번).
+      bestDays: fundingBest,
+      hint: !fundingSupported
+        ? "이 티커는 펀딩비 대상이 아닙니다 (주식이거나 목록에 없는 코인). 펀딩 지표 3개가 안 뜨는 게 정상입니다."
+        : fundingBest === 0
+          ? "펀딩비 소스가 전부 막혔습니다. 아래 error를 보세요 — 배포 서버 IP를 거래소가 차단하면(특히 미국 리전) 이렇게 됩니다."
+          : fundingBest < 300
+            ? `펀딩비가 ${fundingBest}일치뿐입니다. 사이클을 한 번도 못 덮으면 지표는 만들어져도 채점이 안 됩니다.`
+            : `펀딩비 ${fundingBest}일치 확보. 펀딩 지표 3개가 성적표에 나와야 정상입니다.`,
+    },
     hint: sources.every((s) => !s.ok)
       ? process.env.TWELVE_DATA_API_KEY
         ? "모든 소스 실패. 위 error를 보고 원인을 확인하세요."

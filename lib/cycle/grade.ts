@@ -106,7 +106,13 @@ export function gradeSignal(s: SignalEvaluation, qValue: number | null): GradedS
     {
       label: "절반 이상 잡음",
       ok: s.hitRate != null && s.hitRate >= 50,
-      detail: `적중률 ${pct(s.hitRate)}`,
+      // 분모를 같이 적는다. 펀딩비처럼 값이 최근 몇 년치뿐인 지표는 사이클 두어 번으로만
+      // 채점된 적중률이라, 전 기간을 본 지표의 적중률과 같은 무게로 읽으면 안 된다.
+      detail:
+        `적중률 ${pct(s.hitRate)} (${s.hitCount}/${s.coverage.cyclesCovered}번)` +
+        (s.coverage.full
+          ? ""
+          : ` — 이 지표는 ${s.coverage.fromDate}부터만 값이 있어 사이클 ${s.coverage.cyclesTotal}번 중 ${s.coverage.cyclesCovered}번만 채점했습니다`),
     },
     {
       label: "떴을 때 상승분이 남아 있음",

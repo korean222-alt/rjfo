@@ -6,6 +6,7 @@ import BtcSpotHeader from "@/components/BtcSpotHeader";
 import CycleSignalTable from "@/components/CycleSignalTable";
 import { GradeBadge, TimingChip, chancePct, chanceTone, leadText, qTone } from "@/components/SignalMeta";
 import NavTabs from "@/components/NavTabs";
+import PositionPanel from "@/components/PositionPanel";
 import TickerInput from "@/components/TickerInput";
 import TimeframeSelect from "@/components/TimeframeSelect";
 import { SIGNAL_GROUPS, completedStarts, factsForLlm, snapshotOnPct } from "@/lib/cycle";
@@ -240,8 +241,20 @@ export default function CyclePage() {
     return completeStarts.reduce((a, c) => a + snapshotOnPct(c), 0) / completeStarts.length;
   }, [completeStarts]);
 
+  /**
+   * 사이클을 전부 잡은 지표들. 우연대비 높은 순으로 세운다.
+   *
+   * 적중률로 세우면 안 된다 — 여기 있는 건 전부 100%라 순서가 안 생기고, 무엇보다
+   * 신호가 500번 뜨는 지표는 사이클 11번을 다 맞히는 게 당연하다. 그걸 가려내라고
+   * 만든 숫자가 우연대비다.
+   */
   const commonSignals = useMemo(
-    () => (report ? report.signals.filter((s) => report.commonKeys.includes(s.key)) : []),
+    () =>
+      report
+        ? report.signals
+            .filter((s) => report.commonKeys.includes(s.key))
+            .sort((a, b) => (b.lift ?? 0) - (a.lift ?? 0))
+        : [],
     [report],
   );
 
@@ -486,7 +499,34 @@ export default function CyclePage() {
                 })}
               </ul>
             ) : null}
+            {crypto && report.funding ? (
+              <p className="mt-2.5 border-t border-border pt-2.5 text-[11px] leading-relaxed text-muted">
+                {report.funding.days > 0 ? (
+                  <>
+                    펀딩비 <b className="text-white">{report.funding.days.toLocaleString()}일치</b> 붙었습니다 (
+                    {report.funding.first}~{report.funding.last}) · 펀딩 지표{" "}
+                    <b className="text-white">{report.funding.signals}개</b>가 아래 성적표의{" "}
+                    <b className="text-white">수급</b> 그룹에 있습니다.
+                  </>
+                ) : (
+                  <span className="text-amber-300">
+                    펀딩비를 못 받아왔습니다 — 펀딩 지표는 만들어지지 않습니다. 거래소가 배포 서버 IP를 막은
+                    경우가 대부분입니다. <code className="text-white">/api/diag?ticker={report.ticker}</code>를
+                    열면 어느 소스가 왜 실패했는지 나옵니다.
+                  </span>
+                )}
+              </p>
+            ) : null}
           </section>
+
+          {/* 지금 위치 — 등급표가 답하지 못하는 "이미 많이 오른 상태인가"를 잰다 */}
+          {report.position ? (
+            <PositionPanel
+              position={report.position}
+              bearPct={report.thresholds.bearPct}
+              windowAfter={report.window.after}
+            />
+          ) : null}
 
           {/* 매수 근거가 있는 신호 */}
           <section className="rounded-2xl border border-up/30 bg-up/5 p-4">
@@ -541,7 +581,7 @@ export default function CyclePage() {
                       <span className="mt-0.5 flex flex-wrap items-center gap-x-3 pl-4 text-[11px] text-muted">
                         <TimingChip timing={s.timing} />
                         <span>
-                          적중 {s.hitCount}/{report.cycles.length}
+                          적중 {s.hitCount}/{s.coverage.cyclesCovered}
                         </span>
                         <span>리드 {leadText(s.medianLeadDays)}</span>
                         <span>
@@ -551,6 +591,12 @@ export default function CyclePage() {
                             : `${s.medianCaptureSharePct.toFixed(0)}%`}
                         </span>
                         <span className={qTone(s.qValue)}>보정후 {chancePct(s.qValue)}</span>
+                        {s.coverage.full ? null : (
+                          <span className="text-amber-300">
+                            {s.coverage.fromDate}부터만 채점 ({s.coverage.cyclesCovered}/
+                            {report.cycles.length}사이클)
+                          </span>
+                        )}
                       </span>
                     </button>
                   </li>
@@ -661,7 +707,7 @@ export default function CyclePage() {
                         {report.combos.map((sig) => (
                           <option key={sig.key} value={sig.key}>
                             {sig.currentlyOn ? "● " : "○ "}[{sig.grade}] {sig.label} ·{" "}
-                            {sig.hitCount}/{report.cycles.length}
+                            {sig.hitCount}/{sig.coverage.cyclesCovered}
                           </option>
                         ))}
                       </optgroup>
@@ -674,7 +720,7 @@ export default function CyclePage() {
                           {inGroup.map((sig) => (
                             <option key={sig.key} value={sig.key}>
                               {sig.currentlyOn ? "● " : "○ "}[{sig.grade}] {sig.label} ·{" "}
-                              {sig.hitCount}/{report.cycles.length}
+                              {sig.hitCount}/{sig.coverage.cyclesCovered}
                             </option>
                           ))}
                         </optgroup>
@@ -700,9 +746,12 @@ export default function CyclePage() {
                       {selectedSignal.currentlyOn ? "켜짐" : "꺼짐"}
                     </b>
                     <br />
-                    과거 상승장 시작 {report.cycles.length}번 중{" "}
+                    과거 상승장 시작 {selectedSignal.coverage.cyclesCovered}번 중{" "}
                     <b className="text-white">{selectedSignal.hitCount}번</b> 적중(
                     {selectedSignal.hitRate == null ? "—" : `${selectedSignal.hitRate.toFixed(0)}%`})
+                    {selectedSignal.coverage.full
+                      ? ""
+                      : ` · 이 지표는 ${selectedSignal.coverage.fromDate}부터만 값이 있어 ${report.cycles.length}번 중 ${selectedSignal.coverage.cyclesCovered}번만 채점했습니다`}
                     {selectedSignal.alreadyOnCount
                       ? ` · 이미 켜짐 ${selectedSignal.alreadyOnCount}회(적중 아님)`
                       : ""}{" "}
@@ -771,11 +820,18 @@ export default function CyclePage() {
             </div>
           </section>
 
-          {/* 공통 지표 */}
-          <section className="rounded-2xl border border-up/30 bg-up/5 p-4">
-            <h2 className="text-sm font-semibold">
-              적중률 100% ({report.cycles.length}/{report.cycles.length})
-            </h2>
+          {/* 공통 지표 — 100% 적중은 그 자체로는 근거가 아니다 */}
+          <section className="rounded-2xl border border-border bg-surface p-4">
+            <div className="flex items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold">
+                {report.cycles.length}번을 전부 잡은 지표
+              </h2>
+              <span className="text-xs text-muted">우연대비 순</span>
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-amber-300/80">
+              100%는 그 자체로 근거가 아닙니다. 신호가 수백 번 뜨는 지표는 사이클을 전부 맞히는 게
+              당연합니다 — 그래서 <b>우연대비</b>를 먼저 보세요. 1.0배면 아무 날이나 찍은 것과 같습니다.
+            </p>
             {commonSignals.length ? (
               <>
                 <ul className="mt-2.5 space-y-1.5">
@@ -793,7 +849,7 @@ export default function CyclePage() {
                           />
                           <span className="min-w-0 flex-1 truncate">{s.label}</span>
                           <span className="shrink-0 text-sm font-bold">
-                            {s.hitCount}/{report.cycles.length}
+                            {s.hitCount}/{s.coverage.cyclesCovered}
                           </span>
                           <span className="shrink-0 text-[11px] text-muted">
                             {s.currentlyOn ? "켜짐" : "꺼짐"}
@@ -803,6 +859,15 @@ export default function CyclePage() {
                           </span>
                         </span>
                         <span className="mt-0.5 flex flex-wrap gap-x-3 pl-4 text-[11px] text-muted">
+                          <span
+                            className={
+                              s.lift != null && s.lift >= 1.5 ? "font-semibold text-up" : "text-down"
+                            }
+                          >
+                            우연대비 {s.lift == null ? "—" : `${s.lift.toFixed(1)}배`}
+                          </span>
+                          <span>신호 {s.eventCount}회</span>
+                          <span className={chanceTone(s.chance)}>우연일 확률 {chancePct(s.chance)}</span>
                           <span>
                             리드{" "}
                             {s.medianLeadDays == null
@@ -811,17 +876,22 @@ export default function CyclePage() {
                                 ? `${s.medianLeadDays}일 늦게`
                                 : `${Math.abs(s.medianLeadDays)}일 먼저`}
                           </span>
-                          <span>신호 {s.eventCount}회</span>
-                          <span className={chanceTone(s.chance)}>우연일 확률 {chancePct(s.chance)}</span>
                         </span>
+                        {(s.lift != null && s.lift < 1.5) || (s.chance != null && s.chance >= 0.2) ? (
+                          <span className="mt-0.5 block pl-4 text-[11px] leading-relaxed text-down">
+                            ⚠ 신호가 {s.eventCount}회로 잦아 100%가 저절로 나옵니다. 이걸 보고 사는 건
+                            아무 날이나 사는 것과 크게 다르지 않습니다.
+                          </span>
+                        ) : null}
                       </button>
                     </li>
                   ))}
                 </ul>
                 <p className="mt-2 text-[11px] leading-relaxed text-muted">
                   {report.cycles.length}번을 전부, 그 부근에서 <b className="text-white">새로 켜지면서</b> 잡은
-                  지표입니다. 표본이 {report.cycles.length}번뿐이라 100%라는 숫자만으로는 부족합니다 —{" "}
-                  <span className="text-up">우연일 확률이 초록불(20% 미만)</span>인지 같이 보세요.
+                  지표입니다. 다만 이 목록은 <b className="text-white">적중률로 골라낸 것</b>이라 그
+                  자체가 끼워 맞추기에 가깝습니다 — 자주 켜지는 지표일수록 여기 들어오기 쉽습니다.
+                  실제로 살 만한지는 위의 <b className="text-white">여섯 관문(A등급)</b>이 판정합니다.
                 </p>
               </>
             ) : (
@@ -862,7 +932,7 @@ export default function CyclePage() {
                       <span className="mt-1 flex flex-wrap items-center gap-x-3 pl-4 text-[11px] text-muted">
                         <TimingChip timing={s.timing} />
                         <span>
-                          적중 {s.hitCount}/{report.cycles.length}
+                          적중 {s.hitCount}/{s.coverage.cyclesCovered}
                         </span>
                         <span>신호 {s.eventCount}회</span>
                         <span>리드 {leadText(s.medianLeadDays)}</span>

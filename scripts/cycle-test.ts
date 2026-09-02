@@ -917,6 +917,17 @@ console.log("\n[15] A등급 텔레그램 알림 — 무엇을 보내고 무엇�
       edge: 12,
       timing: "후행",
       walkForward: null,
+      coverage: {
+        lo: 0,
+        hi: 999,
+        bars: 1000,
+        fromDate: "2020-01-01",
+        toDate: "2026-08-31",
+        share: 1,
+        cyclesCovered: 3,
+        cyclesTotal: 3,
+        full: true,
+      },
       currentlyOn: true,
       lastEventDate: "2026-08-31",
       daysSinceLastEvent: 0,
@@ -964,6 +975,37 @@ console.log("\n[15] A등급 텔레그램 알림 — 무엇을 보내고 무엇�
   const again = findGradeHits(report, notified);
   assert(again.length === 1, `이미 보낸 건 제외 (실제 ${again.length})`);
   assert(again[0].dedupeKey !== hits[0].dedupeKey, "남은 건 아직 안 보낸 신호");
+
+  // 값이 있는 기간이 짧은 지표는 알림에서도 분모를 좁혀 적고, 그 사실을 밝힌다.
+  const partialReport = {
+    ...report,
+    signals: [
+      signal({
+        key: "fund_neg",
+        label: "펀딩비 음수 (7일)",
+        hitCount: 2,
+        coverage: {
+          lo: 500,
+          hi: 999,
+          bars: 500,
+          fromDate: "2019-09-01",
+          toDate: "2026-08-31",
+          share: 0.5,
+          cyclesCovered: 2,
+          cyclesTotal: 3,
+          full: false,
+        },
+      }),
+    ],
+    combos: [],
+  } as unknown as CycleReport;
+  const partialHits = findGradeHits(partialReport);
+  assert(partialHits.length === 1 && partialHits[0].cycles === 2, "알림 분모도 채점 가능한 사이클");
+  const partialText = formatGradeAlert("BTC-USD", partialReport, partialHits);
+  assert(
+    partialText.includes("2번 중 2번") && partialText.includes("2019-09-01부터만"),
+    "부분 채점 지표는 알림에 그 사실을 적는다",
+  );
 
   const text = formatGradeAlert("005930.KS", report, hits);
   assert(text.includes("005930.KS"), "본문에 티커");
@@ -1019,10 +1061,144 @@ console.log("\n[16] 패널·캔들 정렬");
   );
 }
 
-// ── 17. 실데이터 (인자로 티커를 주면) ─────────────────────────────
+// ── 17. 펀딩비 지표 + 유효구간 채점 ───────────────────────────────
+//
+// 펀딩비는 무료 소스로 2019-09부터만 있다. 그런 '부분 히스토리' 지표를 예전 채점기에
+// 넣으면 우연대비가 부풀려졌다: 분자(정확도)는 값이 있는 최근 구간에서만 나오는데
+// 분모(창 비율)는 전 기간으로 쟀기 때문이다. 반대로 적중률은 데이터가 없어 못 본
+// 옛날 바닥까지 '놓쳤다'로 세어 구조적으로 낮았다. 여기서 그 둘을 다 확인한다.
+console.log("\n[17] 펀딩비 지표 · 부분 히스토리 채점");
+{
+  // 4사이클짜리 시세. 마지막 바닥 조금 전부터만 지표에 값이 있는 상황을 만든다.
+  const closes: number[] = [];
+  const ramp = (from: number, to: number, days: number) => {
+    for (let i = 1; i <= days; i++) closes.push(from + ((to - from) * i) / days);
+  };
+  closes.push(100);
+  ramp(100, 1200, 400);
+  ramp(1200, 200, 300);
+  ramp(200, 2500, 500);
+  ramp(2500, 400, 350);
+  ramp(400, 4000, 550);
+  ramp(4000, 900, 300);
+  ramp(900, 9000, 600);
+  const bars = enrich(barsFromCloses(closes));
+  const cycles = findCycles(bars, CRYPTO_THRESHOLDS);
+  const n = bars.length;
+  const lastTrough = cycles[cycles.length - 1].troughIdx;
+
+  const state: (boolean | null)[] = new Array(n).fill(null);
+  for (let i = lastTrough - 120; i < n; i++) state[i] = false;
+  for (const at of [lastTrough + 10, lastTrough + 40, lastTrough + 90]) {
+    for (let k = at; k < at + 3; k++) state[k] = true;
+  }
+  const rw = resolveWindow(n, cycles);
+  const ev = evaluateSignal(
+    bars,
+    { key: "fake", label: "부분 히스토리 지표", group: "수급", why: "", timeframe: "일봉", state },
+    cycles,
+    baselineStats(bars),
+    rw.share,
+    { window: rw.window },
+  );
+
+  assert(!ev.coverage.full, "값이 앞 구간에 없으면 full=false");
+  assert(
+    ev.coverage.cyclesCovered === 1 && ev.coverage.cyclesTotal === cycles.length,
+    `채점 가능 사이클 1/${cycles.length} (실제 ${ev.coverage.cyclesCovered}/${ev.coverage.cyclesTotal})`,
+  );
+  // 분모를 유효구간으로 좁히면 lift가 5.85배 → 4.22배로 내려온다(전 기간 분모는 17%,
+  // 유효구간 분모는 24%). 부풀려진 값이 관문②를 통과해선 안 된다.
+  approx(ev.lift, 4.22, 0.05, "우연대비는 유효구간 분모로 잰다 (부풀린 5.85배가 아님)");
+  approx(ev.hitRate, 100, 1e-9, "적중률 분모는 채점 가능한 사이클뿐 (1/1, 1/3 아님)");
+  assert(
+    ev.walkForward == null,
+    "채점 가능 사이클이 2개 미만이면 앞뒤로 못 나눈다 → 관문④ 자동 탈락",
+  );
+
+  // 값이 전 구간에 있는 지표는 예전과 똑같이 나와야 한다 (이 수정이 기존 등급을 흔들면 안 된다).
+  const full = evaluateSignal(
+    bars,
+    {
+      key: "full",
+      label: "전 구간 지표",
+      group: "추세",
+      why: "",
+      timeframe: "일봉",
+      state: bars.map((b, i) => b.close > (i >= 20 ? bars[i - 20].close : b.close)),
+    },
+    cycles,
+    baselineStats(bars),
+    rw.share,
+    { window: rw.window },
+  );
+  assert(full.coverage.full, "전 구간에 값이 있으면 full=true");
+  assert(
+    full.coverage.cyclesCovered === cycles.length,
+    "전 구간 지표는 모든 사이클을 채점한다",
+  );
+
+  // 펀딩비가 붙으면 지표 3개가 생기고, 없으면 아예 안 생긴다.
+  const withoutFunding = buildSignals(bars).filter((s) => s.key.startsWith("fund_"));
+  assert(withoutFunding.length === 0, `펀딩 값이 없으면 지표를 만들지 않는다 (${withoutFunding.length}개)`);
+
+  // 마지막 바닥 부근부터만 펀딩이 있는 시세. 바닥 전에는 음수, 뒤로 갈수록 양수로.
+  const withFunding = enrich(
+    barsFromCloses(closes).map((b, i) =>
+      i >= lastTrough - 200
+        ? { ...b, funding: (i - lastTrough) * 0.0000002 + Math.sin(i / 11) * 0.00003 }
+        : b,
+    ),
+  );
+  const fundSignals = buildSignals(withFunding).filter((s) => s.key.startsWith("fund_"));
+  assert(fundSignals.length === 3, `펀딩 지표 3개 (실제 ${fundSignals.length}개)`);
+  for (const sig of fundSignals) {
+    const early = sig.state.slice(0, lastTrough - 300);
+    assert(
+      early.every((v) => v == null),
+      `${sig.key}: 펀딩이 없던 구간은 값 없음(null)`,
+    );
+    const plot = plotForSignal(sig.key, withFunding);
+    const lines = [...plot.overlays, ...(plot.pane?.lines ?? [])];
+    assert(
+      lines.length > 0 && !!plot.rule && lines.some((l) => l.data.length > 0),
+      `${sig.key}: 차트 그림과 켜짐 조건 설명이 있다`,
+    );
+  }
+
+  // 펀딩 지표를 배터리에 넣고 돌려도 유효구간이 리포트에 실린다.
+  const report = analyzeCycle("BTC-USD", withFunding);
+  const fundGraded = report.signals.filter((s) => s.key.startsWith("fund_"));
+  assert(fundGraded.length === 3, "리포트에 펀딩 지표 3개가 채점되어 실린다");
+  assert(
+    fundGraded.every((s) => !s.coverage.full && s.coverage.fromDate != null),
+    "펀딩 지표는 부분 커버리지로 표시된다",
+  );
+  assert(
+    report.commonKeys.every((k) => !k.startsWith("fund_")),
+    "부분 커버리지 지표는 '전 사이클 적중'에 들어가지 않는다",
+  );
+
+  // 펀딩비가 몇 일치 붙었는지 리포트가 그대로 들고 있어야 화면에서 원인을 구분할 수 있다.
+  assert(report.funding.days > 0, `리포트에 펀딩 일수가 실린다 (${report.funding.days}일)`);
+  assert(report.funding.signals === 3, `리포트에 펀딩 지표 수가 실린다 (${report.funding.signals}개)`);
+  assert(
+    report.funding.first != null && report.funding.last != null,
+    "펀딩 시작·끝 날짜가 실린다",
+  );
+
+  // 펀딩이 아예 없는 시세면 0으로 나와야 한다 ('소스가 막힌 것'과 '원래 없는 것'을 구분하는 근거).
+  const noFunding = analyzeCycle("BTC-USD", bars);
+  assert(
+    noFunding.funding.days === 0 && noFunding.funding.signals === 0,
+    "펀딩이 없으면 0/0으로 실린다",
+  );
+}
+
+// ── 18. 실데이터 (인자로 티커를 주면) ─────────────────────────────
 const ticker = process.argv[2];
 if (ticker) {
-  console.log(`\n[17] 실데이터: ${ticker}`);
+  console.log(`\n[18] 실데이터: ${ticker}`);
   (async () => {
     const { loadBars, MAX_YEARS } = await import("../lib/data");
     const { normalizeTicker } = await import("../lib/data/provider");

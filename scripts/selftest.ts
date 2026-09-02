@@ -12,6 +12,8 @@ import { analyze, forwardReturn, maxForwardReturn } from "../lib/stats";
 import { checkLatest, formatAlert } from "../lib/alerts/evaluate";
 import { mergeOlderHistory, toUniqueBars } from "../lib/data/crypto";
 import { binomTailGe } from "../lib/cycle/evaluate";
+import { assessPosition, onRuns } from "../lib/cycle/position";
+import type { EnrichedBar } from "../types";
 import { parseMaCommand } from "../lib/ma";
 import { PRESET_CHIPS, PRESET_CONDITIONS } from "../lib/presets";
 import type { Bar, FilterSpec, PresetName } from "../types";
@@ -422,6 +424,71 @@ console.log("\n[10] 우연일 확률 — 이항 검정");
   const 많음 = binomTailGe(12, 12, 0.12);
   assert(적음 > 0.01, `신호 2번 다 맞은 건 우연일 수 있다 (${(적음 * 100).toFixed(1)}%)`);
   assert(많음 < 적음, "같은 100% 적중이라도 표본이 많으면 우연일 확률이 낮다");
+}
+
+
+console.log("\n[11] 지금 위치 — 켜진 구간과 반납폭");
+{
+  // onRuns: 왼쪽이 잘린 구간(언제 켜졌는지 모르는 것)은 버린다.
+  const runs = onRuns([null, true, true, false, false, true, false, true]);
+  assert(runs.length === 2, `왼쪽 잘린 구간 제외 후 2개 (${runs.length}개)`);
+  assert(runs[0].start === 5 && runs[0].end === 5, "첫 온전한 구간 = [5,5]");
+  assert(runs[1].start === 7 && runs[1].end === null, "마지막 구간은 아직 켜져 있음(end=null)");
+
+  // 반납폭: 종가를 손으로 짠다. 100에서 시작해 200까지 갔다가 150에 지표가 꺼지고,
+  // 다시 켜져 300까지 갔다가 지금 270. 과거 꺼진 지점은 200→150이므로 −25%.
+  const closes = [100, 200, 150, 160, 300, 270];
+  const bars: EnrichedBar[] = closes.map((c, i) => ({
+    date: `2020-01-0${i + 1}`,
+    open: c,
+    high: c,
+    low: c,
+    close: c,
+    volume: 1,
+  })) as EnrichedBar[];
+  // idx0 꺼짐 → 1,2 켜짐 → 3 꺼짐(=탈출 종가 160? 아니다) …
+  // state를 이렇게 둔다: [false, true, true, false, true, true]
+  //   구간 A = [1,2] (최고 200, 꺼진 날 idx3 종가 160 → −20%)
+  //   구간 B = [4, 아직] (최고 300, 지금 270 → −10%)
+  const state = [false, true, true, false, true, true];
+  const pos = assessPosition(
+    bars,
+    [
+      {
+        peakDate: null,
+        peakIdx: null,
+        peakClose: null,
+        troughDate: bars[0].date,
+        troughIdx: 0,
+        troughClose: 100,
+        drawdownPct: null,
+        gainPct: 200,
+        nextPeakDate: null,
+        nextPeakIdx: null,
+        nextPeakClose: 300,
+        closed: false,
+      },
+    ],
+    [{ key: "t", label: "테스트", grade: "A", score: 1, state }],
+    { bearPct: 40, bullPct: 80 },
+    150,
+  );
+  const s0 = pos.onSignals[0];
+  assert(s0 != null && s0.key === "t", "켜져 있는 지표가 목록에 들어간다");
+  approx(s0.givebackNowPct, -10, 1e-9, "지금 반납폭: 최고 300 대비 270 = −10%");
+  approx(s0.medianExitGivebackPct, -20, 1e-9, "과거 꺼진 지점: 최고 200 대비 160 = −20%");
+  assert(s0.exitSamples === 1, `과거 꺼진 표본 1회 (${s0.exitSamples}회)`);
+  // 270에서 −20% 수준(=300×0.8=240)까지 가려면 −11.11%.
+  approx(s0.furtherDropToExitPct, (240 / 270 - 1) * 100, 1e-9, "꺼질 때까지 추가 하락 = −11.1%");
+  assert(s0.daysOn === 1 && s0.fresh, "켜진 지 1거래일 → 등급 창 안");
+
+  // 사이클 진행도: 끝난 과거 사이클이 없으면 진행도는 못 잰다(지어내지 않는다).
+  assert(pos.cycle.progressPct === null, "끝난 과거 사이클이 없으면 진행도 null");
+  approx(pos.cycle.gainPct, 170, 1e-9, "바닥 100 → 지금 270 = +170%");
+  approx(pos.cycle.fromPeakPct, -10, 1e-9, "이번 사이클 고점 300 대비 −10%");
+  // 하락 전환선 = 300 × 0.6 = 180. 270에서 −33.3%.
+  approx(pos.cycle.furtherDropToBearPct, (180 / 270 - 1) * 100, 1e-9, "하락 국면까지 −33.3%");
+  assert(pos.stage === "판정불가", `진행도를 못 재면 단계는 판정불가 (${pos.stage})`);
 }
 
 console.log(
