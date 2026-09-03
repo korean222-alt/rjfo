@@ -131,17 +131,12 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
       </div>
 
       <p className="mt-3 text-[11px] leading-relaxed text-muted">
-        적중률 = 과거 상승장 시작 {report.cycles.length}번 중 그 부근에서 <b className="text-white">새로 켜져서</b>{" "}
-        잡은 횟수(하락장 내내 켜진 채 바닥을 지나온 건 적중이 아니라 &lsquo;이미 켜짐&rsquo;) · 리드 = 실제 바닥 대비
-        신호 시점 · 남은상승 = 신호 시점에 그 사이클 상승분이 얼마나 남아 있었나 ·{" "}
-        <b className="text-white">우연대비</b> = 아무 날이나 찍었을 때 대비 배수(1.0이면 우연과 같음, 전체 기간의{" "}
-        {num(report.windowSharePct, 0, "%")}가 상승장 시작 부근) · 기저대비 = 신호 후 1년 수익률 − 아무 날이나
-        골랐을 때(연 {num(report.baseline["250"].avg, 0, "%")}) ·{" "}
-        <b className="text-white">우연일 확률</b> = 이 지표의 신호를 통째로 아무 시점으로나 옮겨도 이만큼 맞을 확률
-        (낮을수록 좋고, <span className="text-up">20% 미만이면 초록불</span>, 5% 미만이면 우연으로 보기 어렵습니다) ·{" "}
-        <b className="text-white">보정후</b> = 지표 수십 개를 한꺼번에 검사한 걸 감안해 다시 매긴 확률(q값). 등급은
-        이 값으로 판정합니다 · <b className="text-white">A~D</b> = 매수 근거 여섯 관문 중 몇 개를 통과했나 (누르면
-        관문별 통과 여부가 나옵니다)
+        적중 = 바닥 부근에서 <b className="text-white">새로 켜져서</b> 잡은 횟수 · 리드 = 바닥 대비 신호 시점 ·
+        남은상승 = 신호 때 그 사이클 상승분이 얼마나 남았나 · <b className="text-white">우연대비</b> = 아무 날
+        대비 배수(1.0 = 우연, 시작 부근은 전체의 {num(report.windowSharePct, 0, "%")}) · 기저대비 = 1년 수익률 −
+        기저율(연 {num(report.baseline["250"].avg, 0, "%")}) · <b className="text-white">우연일 확률</b> ·{" "}
+        <b className="text-white">보정후</b> = 지표 수십 개를 한꺼번에 본 걸 감안한 q값(등급은 이 값으로 판정) ·{" "}
+        <b className="text-white">A~D</b> = 여섯 관문 중 통과 수. 누르면 자세히 나옵니다.
       </p>
 
       <ul className="mt-3 space-y-1.5">
@@ -206,8 +201,7 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                       ))}
                     </ul>
                     <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-                      여섯 개를 다 통과해야 A입니다. 다 통과해도 과거 사이클{" "}
-                      {report.cycles.length}번에서 그랬다는 뜻일 뿐입니다.
+                      여섯 개를 다 통과해야 A입니다 (과거 {report.cycles.length}번 기준).
                     </p>
                   </div>
 
@@ -226,7 +220,7 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                             </>
                           ) : h.alreadyOn ? (
                             <span className="text-muted">
-                              적중 아님 — 창 안에 새 신호가 없고, 바닥 당시 이미 켜져 있던 상태
+                              적중 아님 — 바닥 때 이미 켜져 있었음
                               {h.eventDate ? ` (${h.eventDate}에 켜짐)` : ""}
                             </span>
                           ) : (
@@ -240,11 +234,10 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                   <div className="rounded-lg border border-border bg-surface px-2.5 py-2">
                     <p className="text-[11px] font-semibold">이게 우연일까?</p>
                     <p className="mt-1 text-[11px] leading-relaxed text-muted">
-                      이 지표는 전체 기간에 <b className="text-white">{s.eventCount}번</b> 떴고, 그중{" "}
-                      <b className="text-white">{s.inWindowEvents.length}번</b>이 상승장 시작 부근이었습니다
-                      (정확도 {num(s.precision, 0, "%")} · 나머지 {s.falseAlarms}번은 헛신호). 상승장 시작 부근은
-                      전체 기간의 {num(report.windowSharePct, 0, "%")}뿐이니, 이 신호들을 간격째로 아무 시점으로나
-                      옮겨도 이만큼 맞을 확률은{" "}
+                      전체 <b className="text-white">{s.eventCount}번</b> 중{" "}
+                      <b className="text-white">{s.inWindowEvents.length}번</b>이 시작 부근이었습니다 (정확도{" "}
+                      {num(s.precision, 0, "%")} · 헛신호 {s.falseAlarms}번). 시작 부근은 전체의{" "}
+                      {num(report.windowSharePct, 0, "%")}뿐이라, 아무 시점으로 옮겨도 이만큼 맞을 확률은{" "}
                       <b className={chanceTone(s.chance)}>{chancePct(s.chance)}</b>입니다.
                       {s.chance != null && s.chance >= 0.2
                         ? " 우연으로도 충분히 나오는 성적입니다."
@@ -255,19 +248,17 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                             : ""}
                     </p>
                     <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-                      과거 상승장 시작 {s.coverage.cyclesCovered}번 중{" "}
-                      <b className="text-white">{s.hitCount}번</b>을 새로 켜지면서 잡았습니다 (적중률{" "}
+                      상승장 시작 {s.coverage.cyclesCovered}번 중{" "}
+                      <b className="text-white">{s.hitCount}번</b>을 새로 켜지며 잡았습니다 (적중률{" "}
                       {num(s.hitRate, 0, "%")}).
                       {s.alreadyOnCount
-                        ? ` 그 밖에 ${s.alreadyOnCount}번은 창 안에 새 신호가 없었고 바닥 당시 이미 켜져 있기만 했습니다 — 적중으로 세지 않았습니다.`
+                        ? ` ${s.alreadyOnCount}번은 바닥 때 이미 켜져 있어 적중으로 세지 않았습니다.`
                         : ""}
                     </p>
                     {s.coverage.full ? null : (
                       <p className="mt-1.5 text-[11px] leading-relaxed text-amber-300/80">
-                        이 지표는 {s.coverage.fromDate}부터만 값이 있습니다. 전체 사이클{" "}
-                        {s.coverage.cyclesTotal}번 중 {s.coverage.cyclesCovered}번만 채점했고,
-                        적중률·우연대비의 분모도 그 구간으로 좁혀 잡았습니다 — 안 그러면 데이터가 없다는
-                        이유로 적중률이 깎이고 우연대비는 부풀려집니다. 표본이 얇다는 사실은 그대로입니다.
+                        {s.coverage.fromDate}부터만 값이 있어 {s.coverage.cyclesTotal}번 중{" "}
+                        {s.coverage.cyclesCovered}번만 채점했습니다 (분모도 그 구간으로 좁혔습니다).
                       </p>
                     )}
                   </div>
@@ -292,8 +283,8 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                         }`}
                       >
                         {s.walkForward.heldUp
-                          ? "양쪽 기간 모두에서 통했습니다. 옛날 한 번의 대박으로 만들어진 성적이 아닙니다."
-                          : "한쪽 기간에서만 통했습니다. 과거 전체를 뭉쳐서 본 성적은 믿기 어렵습니다."}
+                          ? "양쪽 기간 모두 통했습니다."
+                          : "한쪽 기간에서만 통했습니다 — 전체 성적은 믿기 어렵습니다."}
                       </p>
                     </div>
                   ) : null}
@@ -301,13 +292,13 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
                   <div className="rounded-lg border border-border bg-surface px-2.5 py-2">
                     <p className="text-[11px] font-semibold">사고 나서 얼마나 물리나</p>
                     <p className="mt-1 text-[11px] leading-relaxed text-muted">
-                      신호 다음 날 사서 1년 들고 갔다면, 그 사이 최저점까지 보통{" "}
-                      <b className="text-down">{num(s.drawdown.medianPct, 0, "%")}</b>, 가장 나빴을 때{" "}
-                      <b className="text-down">{num(s.drawdown.worstPct, 0, "%")}</b> 물렸습니다. 1년 뒤 수익률이
-                      가장 나빴던 경우는 <b className={toneFor(s.forward["250"].worst)}>
+                      신호 다음 날 사서 1년 들었다면 최저점까지 보통{" "}
+                      <b className="text-down">{num(s.drawdown.medianPct, 0, "%")}</b>, 최악{" "}
+                      <b className="text-down">{num(s.drawdown.worstPct, 0, "%")}</b> 물렸습니다. 1년 뒤
+                      수익률 최악은 <b className={toneFor(s.forward["250"].worst)}>
                         {signed(s.forward["250"].worst, 0, "%")}
                       </b>
-                      입니다. 평균만 보면 이게 안 보입니다.
+                      입니다.
                     </p>
                   </div>
 
@@ -352,8 +343,7 @@ export default function CycleSignalTable({ report, selectedKey, onSelect }: Prop
 
                   {s.lift != null && s.lift < 1 ? (
                     <p className="rounded-lg border border-down/30 bg-down/5 px-2.5 py-2 text-[11px] leading-relaxed text-down">
-                      이 지표는 아무 날이나 찍는 것보다 상승장 시작을 <b>덜</b> 가리켰습니다(우연대비{" "}
-                      {s.lift.toFixed(2)}배). 적중률이 높은 건 자주 켜지기 때문일 뿐입니다.
+                      아무 날이나 찍는 것보다 <b>덜</b> 가리켰습니다 (우연대비 {s.lift.toFixed(2)}배).
                     </p>
                   ) : null}
 

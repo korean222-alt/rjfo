@@ -5,7 +5,7 @@ import { fundingInstrument, probeFundingSources } from "@/lib/data/funding";
 import {
   generateText,
   GeminiError,
-  getWorkingModel,
+  geminiState,
   LATEST_ALIAS,
   PINNED_NEWEST,
   STATIC_CANDIDATES,
@@ -117,7 +117,9 @@ export async function GET(req: Request) {
       pinned: PINNED_NEWEST,
       alias: LATEST_ALIAS,
       fallbacks: STATIC_CANDIDATES,
-      workingModel: getWorkingModel(),
+      // 이 인스턴스가 알아낸 것: 성공한 모델 / 없는 모델 / 굼뜬 모델 / 키에 열려 있는 목록.
+      // "AI가 안 뜬다"의 원인이 어느 쪽인지 여기서 바로 갈린다.
+      ...geminiState(),
     },
     sources,
     funding: {

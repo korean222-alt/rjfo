@@ -15,7 +15,9 @@ import { generateText, GeminiError, summarizeAttempts } from "@/lib/gemini";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+// 요약·질문 모두 폴백 체인을 몇 번 돌 수 있어야 한다. 30초는 첫 모델이 굼뜨면
+// 두 번째 후보에서 잘렸다.
+export const maxDuration = 60;
 
 /** FACTS는 지표 30여 개 요약이라 5KB 안팎이다. 넉넉히 잡되 무한정 받지는 않는다. */
 const MAX_FACTS = 40_000;
@@ -58,7 +60,7 @@ export async function POST(req: Request) {
   const question = typeof body.question === "string" ? body.question.trim().slice(0, MAX_QUESTION) : "";
   const facts = typeof body.facts === "string" ? body.facts.slice(0, MAX_FACTS) : "";
   // 자동 요약은 사용자가 기다리지 않는다(화면은 이미 떠 있다). 그래서 모델 하나를
-  // 오래 붙잡지 않고 7초 안에 안 오면 다음 후보로 넘긴다.
+  // 오래 붙잡지 않고 8초 안에 안 오면 다음 후보로 넘긴다.
   const summary = body.mode === "summary";
   if (!question) return json({ error: "질문을 입력해 주세요." }, { status: 400 });
   if (!facts) return json({ error: "먼저 종목을 분석해 주세요." }, { status: 400 });
@@ -81,8 +83,11 @@ export async function POST(req: Request) {
       json: false,
       maxOutputTokens: summary ? 700 : 600,
       // 사용자가 직접 누른 질문은 기다려 줄 가치가 있고, 자동 요약은 아니다.
-      deadlineMs: summary ? 15_000 : 18_000,
-      ...(summary ? { attemptCapMs: 7_000 } : {}),
+      // 함수 상한(60초)보다 넉넉히 아래. 예전엔 15초라 굼뜬 모델 둘이면 끝이었다 —
+      // 그게 "AI만 계속 안 뜨는" 화면의 실제 원인이었다.
+      deadlineMs: summary ? 26_000 : 30_000,
+      // 자동 요약은 사용자가 기다리지 않으니 한 모델에 오래 매달리지 않고 후보를 더 본다.
+      ...(summary ? { attemptCapMs: 8_000 } : {}),
     });
     const answer = text.trim();
     if (!answer || answer.startsWith("{") || answer.startsWith("```")) {

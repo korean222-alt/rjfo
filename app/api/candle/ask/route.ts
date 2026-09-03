@@ -10,7 +10,9 @@ import { generateText, GeminiError, summarizeAttempts } from "@/lib/gemini";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+// 요약·질문 모두 폴백 체인을 몇 번 돌 수 있어야 한다. 30초는 첫 모델이 굼뜨면
+// 두 번째 후보에서 잘렸다.
+export const maxDuration = 60;
 
 const MAX_FACTS = 40_000;
 const MAX_QUESTION = 300;
@@ -70,8 +72,11 @@ export async function POST(req: Request) {
         : `질문: ${question}\n\nFACTS:\n${facts}\n\n이 FACTS만 가지고 질문에 답해라.`,
       json: false,
       maxOutputTokens: summary ? 700 : 600,
-      deadlineMs: summary ? 15_000 : 18_000,
-      ...(summary ? { attemptCapMs: 7_000 } : {}),
+      // 함수 상한(60초)보다 넉넉히 아래. 예전엔 15초라 굼뜬 모델 둘이면 끝이었다 —
+      // 그게 "AI만 계속 안 뜨는" 화면의 실제 원인이었다.
+      deadlineMs: summary ? 26_000 : 30_000,
+      // 자동 요약은 사용자가 기다리지 않으니 한 모델에 오래 매달리지 않고 후보를 더 본다.
+      ...(summary ? { attemptCapMs: 8_000 } : {}),
     });
     const answer = text.trim();
     if (!answer || answer.startsWith("{") || answer.startsWith("```")) {

@@ -403,9 +403,8 @@ export default function CyclePage() {
           {tuning ? (
             <div className="space-y-3 border-t border-border px-4 py-3">
               <p className="text-[11px] leading-relaxed text-muted">
-                고점 대비 <b>하락 기준</b>만큼 빠진 뒤, 저점 대비 <b>반등 기준</b>만큼 오른 그 저점을
-                상승장 시작으로 봅니다. 코인은 기본 -40%/+80%, 주식은 -20%/+40%입니다. 기준을 낮추면
-                사이클 수가 늘지만 잔파동까지 상승장으로 세게 됩니다.
+                고점에서 <b>하락 기준</b>만큼 빠진 뒤 <b>반등 기준</b>만큼 오른 저점 = 상승장 시작.
+                기본값은 코인 -40%/+80%, 주식 -20%/+40%. 낮출수록 잔파동까지 셉니다.
               </p>
               <label className="block text-xs text-muted">
                 하락 기준 {bearPct ?? "자동"}%
@@ -476,10 +475,8 @@ export default function CyclePage() {
             <p className="mt-2 text-sm leading-relaxed">{payload.reply}</p>
             {payload.aiError ? (
               <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-relaxed text-amber-200/90">
-                위 문장은 <b>AI가 아니라 서버가 만든 요약문</b>입니다. AI 문장은 못 받았습니다:{" "}
-                {payload.aiError}
-                <br />
-                숫자·등급·차트는 AI와 무관하게 이미 계산돼 있습니다 — 이것 때문에 늦어지는 건 없습니다.
+                위 문장은 <b>서버가 만든 요약문</b>입니다 (AI 실패: {payload.aiError}). 숫자·등급·차트는
+                AI와 무관합니다.
               </p>
             ) : null}
             {qa ? (
@@ -520,12 +517,7 @@ export default function CyclePage() {
               </button>
             </form>
             <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
-              이 화면에 이미 계산된 숫자만 보고 답합니다. 종목을 다시 분석하지 않습니다.
-              <br />
-              <b className="text-white">차트 분석 자체에는 AI가 필요 없습니다</b> — 사이클 탐지,
-              지표 채점, 적중률·우연대비·q값, 여섯 관문 등급은 전부 서버 코드가 수식으로 계산합니다.
-              AI는 그 숫자를 한국어 문장으로 옮기는 일만 하고, 꺼져 있으면 서버가 만든 요약문이
-              대신 나옵니다(아래 숫자는 그대로).
+              화면에 이미 계산된 숫자만 보고 답합니다. 채점·등급은 서버가 하고 AI는 문장만 만듭니다.
             </p>
           </section>
 
@@ -629,9 +621,8 @@ export default function CyclePage() {
               · 우연대비 천장 {(100 / Math.max(1, report.windowSharePct)).toFixed(1)}배
             </p>
             <p className="mt-1 text-[11px] leading-relaxed text-amber-300/80">
-              A등급 <b>개수</b>는 종목끼리 비교하지 마세요. 사이클이 3번 이하면 앞뒤 기간을 못 나눠 관문 ④에서 전부
-              떨어지고(그 종목이 나쁜 게 아닙니다), 너무 잦으면 창이 넓어져 관문 ②가 막힙니다. 같은 모양의 시세로
-              주기만 바꿔도 A등급 개수가 크게 요동칩니다.
+              A등급 <b>개수</b>는 종목끼리 비교하지 마세요. 사이클이 3번 이하면 관문 ④에서, 너무 잦으면
+              관문 ②에서 통째로 떨어집니다.
             </p>
 
             {buySignals.length ? (
@@ -685,8 +676,8 @@ export default function CyclePage() {
               </ul>
             ) : (
               <p className="mt-2 text-sm leading-relaxed text-muted">
-                여섯 관문을 다 통과한 신호가 <b className="text-white">없습니다</b>. 이 종목·이 기간에서는
-                &lsquo;이거 뜨면 사도 된다&rsquo;고 말할 근거가 데이터에 없다는 뜻입니다.
+                여섯 관문을 다 통과한 신호가 <b className="text-white">없습니다</b> — 이 기간 데이터에는
+                &lsquo;뜨면 사도 된다&rsquo;고 할 근거가 없다는 뜻입니다.
                 {nearMiss.length ? (
                   <>
                     {" "}
@@ -699,7 +690,7 @@ export default function CyclePage() {
                     무엇이 막았나 (걸린 지표 수):{" "}
                     {gateBlockers.slice(0, 3).map(([label, n]) => `${label} ${n}개`).join(" · ")}
                     {report.cycles.length <= 3
-                      ? " — 상승장 전환이 3번 이하라 앞뒤 기간 검증(관문 ④) 자체가 불가능합니다. 기준을 낮춰 사이클을 더 잡거나, 더 긴 데이터가 필요합니다."
+                      ? " — 전환이 3번 이하라 앞뒤 기간 검증(관문 ④) 자체가 불가능합니다."
                       : ""}
                   </span>
                 ) : null}
@@ -708,17 +699,14 @@ export default function CyclePage() {
 
             {qTied ? (
               <p className="mt-2 text-[11px] leading-relaxed text-muted">
-                위 신호들의 &lsquo;보정후&rsquo; 값이 같은 숫자로 겹칩니다. 다중검정 보정(q값)이 같은 구간으로 묶은 것이라,
-                <b className="text-white"> 서로 우열을 가릴 수 없다</b>는 뜻입니다 — 각각 독립으로 증명된 게 아닙니다.
-                게다가 조합은 구성 지표와 겹쳐 서로 독립이 아니므로, 이 값은 낙관적인 쪽입니다.
+                &lsquo;보정후&rsquo; 값이 겹칩니다 —{" "}
+                <b className="text-white">서로 우열을 가릴 수 없다</b>는 뜻입니다.
               </p>
             ) : null}
 
             <p className="mt-2.5 border-t border-border pt-2 text-[11px] leading-relaxed text-muted">
-              여섯 관문: ① 다중검정 보정 후에도 우연이 아님 ② 아무 날이나 찍은 것보다 1.5배 이상 자주 상승장
-              시작을 가리킴 ③ 신호 후 1년 수익률이 그냥 산 것보다 높음 ④ 앞 기간·뒤 기간 모두에서 통함
-              ⑤ 상승장 시작을 절반 이상 잡음 ⑥ 떴을 때 그 사이클 상승분이 절반 이상 남아 있었음. 성적표에서
-              지표를 누르면 관문별 통과 여부가 나옵니다.
+              여섯 관문: ① 보정 후에도 우연 아님 ② 우연대비 1.5배 이상 ③ 1년 수익률이 기저율보다 높음
+              ④ 앞뒤 기간 모두 통함 ⑤ 시작을 절반 이상 잡음 ⑥ 상승분이 절반 이상 남아 있었음
             </p>
           </section>
 
@@ -759,10 +747,8 @@ export default function CyclePage() {
                 <p className="text-xs font-medium">차트 봉</p>
                 <TimeframeSelect value={tf} onChange={setTf} />
               </div>
-              <p className="mb-2 text-[11px] leading-relaxed text-muted">
-                {tf === "1d"
-                  ? "주봉·월봉으로 바꿔도 성적표는 일봉 채점입니다."
-                  : <>지금은 <b className="text-white">{CHART_TF_LABEL[tf]}</b>으로 봅니다. 성적표의 켜짐·적중은 일봉 채점 그대로입니다.</>}
+              <p className="mb-2 text-[11px] text-muted">
+                {tf === "1d" ? "성적표는 일봉 채점입니다." : <>{CHART_TF_LABEL[tf]} 차트 · 성적표는 일봉 채점 그대로입니다.</>}
               </p>
               {crypto ? <div className="mb-2"><BtcSpotHeader ticker={report.ticker} /></div> : null}
 
@@ -844,7 +830,7 @@ export default function CyclePage() {
                         <b className="text-white">{selectedSignal.onSharePct.toFixed(0)}%</b>를 켜져
                         있었습니다.
                         {selectedSignal.onSharePct >= 60
-                          ? " 늘 켜져 있는 지표는 상승장 시작이 언제였든 대부분 켜져 있었을 테니, 적중률이 높은 게 당연합니다 — 적중률 말고 우연대비를 보세요."
+                          ? " 늘 켜져 있는 지표라 적중률이 높은 건 당연합니다 — 우연대비를 보세요."
                           : ""}
                       </>
                     ) : null}
@@ -875,8 +861,7 @@ export default function CyclePage() {
                     {matchedDates.length}회
                     {markersTrimmed ? (
                       <>
-                        . 이 지표는 전체 {selectedSignal.eventCount}회로 너무 자주 떠서 나머지는
-                        표시하지 않았습니다(그만큼 잘 속는다는 뜻입니다 — 우연대비{" "}
+                        . 전체 {selectedSignal.eventCount}회로 너무 잦아 나머지는 생략했습니다 (우연대비{" "}
                         {selectedSignal.lift?.toFixed(2) ?? "—"}배).
                       </>
                     ) : (
@@ -923,15 +908,14 @@ export default function CyclePage() {
                 >
                   {commonTrusted.length ? (
                     <>
-                      적중률 100%짜리 {commonSignals.length}개 중{" "}
-                      <b>{commonTrusted.length}개</b>만 우연으로 설명되지 않습니다. 나머지{" "}
-                      {commonNoise.length}개는 자주 떠서 저절로 100%가 된 것이라 접어 뒀습니다.
+                      100%짜리 {commonSignals.length}개 중 <b>{commonTrusted.length}개</b>만 우연으로
+                      설명되지 않습니다. 나머지 {commonNoise.length}개는 접어 뒀습니다.
                     </>
                   ) : (
                     <>
-                      여기서 믿을 건 <b>하나도 없습니다</b>. {commonSignals.length}개 전부 자주
-                      떠서 저절로 100%가 된 쪽입니다(우연대비 1.5배 미만이거나 우연일 확률 20%
-                      이상). 100%라는 숫자만 보고 사면 아무 날이나 사는 것과 다르지 않습니다.
+                      {commonSignals.length}개 <b>전부 너무 자주 떠서</b> 100%가 된 쪽입니다(우연대비
+                      1.5배 미만 또는 우연일 확률 20% 이상). 늘 켜져 있는 지표는 바닥이 언제였든
+                      켜져 있으니 100%가 당연합니다.
                     </>
                   )}
                 </p>
@@ -960,10 +944,8 @@ export default function CyclePage() {
                     {showNoise ? (
                       <>
                         <p className="mt-1.5 px-1 text-[11px] leading-relaxed text-muted">
-                          아래는 <b className="text-white">전부 같은 이유로 걸렀습니다</b>: 신호가
-                          너무 잦아 사이클 {report.cycles.length}번을 다 맞히는 게 당연한 지표들입니다.
-                          우연대비가 1.0배면 아무 날이나 찍은 것과 같고, 1.5배(관문 ②)를 못 넘으면
-                          매수 근거로 쓰지 않습니다.
+                          전부 같은 이유입니다: 신호가 잦아 {report.cycles.length}번을 다 맞히는 게
+                          당연한 지표들 (우연대비 1.5배 미만).
                         </p>
                         <ul className="mt-1.5 space-y-1.5 opacity-70">
                           {commonNoise.map((s) => (
@@ -978,20 +960,15 @@ export default function CyclePage() {
                 ) : null}
 
                 <p className="mt-2.5 border-t border-border pt-2 text-[11px] leading-relaxed text-muted">
-                  {report.cycles.length}번을 전부, 그 부근에서 <b className="text-white">새로 켜지면서</b> 잡은
-                  지표입니다. 다만 이 목록은 <b className="text-white">적중률로 골라낸 것</b>이라 그
-                  자체가 끼워 맞추기에 가깝습니다 — 자주 켜지는 지표일수록 여기 들어오기 쉽습니다.
-                  <b className="text-white"> 그래서 무엇을 볼지는 이 목록이 아니라</b> 위의{" "}
-                  <b className="text-white">여섯 관문(A등급)</b>이 정합니다
-                  {buySignals.length
-                    ? ` — 지금 A등급은 ${buySignals.length}개입니다.`
-                    : " — 지금 A등급은 하나도 없습니다. 그게 결론입니다."}
+                  {report.cycles.length}번 모두 그 부근에서 <b className="text-white">새로 켜지며</b> 잡은
+                  지표입니다. 적중률로 고른 목록이라 자주 켜지는 지표일수록 들어오기 쉽습니다 — 무엇을
+                  볼지는 위의 <b className="text-white">A등급</b>이 정합니다
+                  {buySignals.length ? ` (지금 ${buySignals.length}개).` : " (지금 0개)."}
                 </p>
               </>
             ) : (
               <p className="mt-2 text-sm text-muted">
-                {report.cycles.length}번 전부를 새로 켜지면서 잡은 지표는 없습니다. 아래 성적표에서 적중률 순으로
-                보세요.
+                {report.cycles.length}번 전부를 새로 켜지면서 잡은 지표는 없습니다.
               </p>
             )}
           </section>
@@ -1004,8 +981,7 @@ export default function CyclePage() {
                 <span className="text-xs text-muted">{report.combos.length}개 중 상위 6</span>
               </div>
               <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-                상위 지표들을 성격이 다른 것끼리 짝지어 &lsquo;둘 다 켜진 첫날&rsquo;을 신호로 채점했습니다.
-                겹치면 신호가 줄어드는 대신 헛신호가 걸러집니다. 조합도 단일 지표와 같은 보정 풀에 넣었습니다.
+                성격이 다른 상위 지표끼리 짝지어 &lsquo;둘 다 켜진 첫날&rsquo;을 신호로 채점했습니다.
               </p>
               <ul className="mt-2.5 space-y-1.5">
                 {report.combos.slice(0, 6).map((s) => (

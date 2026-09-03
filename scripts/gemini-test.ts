@@ -7,7 +7,8 @@
  *  - 429는 재시도 없이 바로 다음 모델로 넘어가는가
  *  - 5xx만 같은 모델을 한 번 더 재시도하는가
  *  - 404는 폐기 처리하고 다시 시도하지 않는가
- *  - 정적 후보가 전부 막히면 /models 조회로 우회하는가
+ *  - 정적 후보를 다 찔러 보기 전에 /models 조회부터 하는가 (없는 이름에 예산을 태우지 않게)
+ *  - 시간 초과한 모델을 다음 요청에서 뒤로 미루는가
  *  - 마지막 성공 모델을 기억해서 다음 요청에 먼저 쓰는가
  *  - 3.x에는 thinkingLevel:low를 싣고, 구형 모델에는 싣지 않는가
  *  - thinking 때문에 400이 나거나 응답이 비면 그 필드만 빼고 재시도하는가
@@ -224,6 +225,61 @@ async function main() {
     assert(!calls.includes("gemini-2.5-flash-preview-tts"), "TTS 모델을 호출하지 않음");
     assert(!calls.includes("gemini-2.5-flash-image"), "이미지 모델을 호출하지 않음");
     assert(r.model === "gemini-3-pro-something", `텍스트 모델로 성공 (${r.model})`);
+  }
+
+  console.log("\n[7c] 정적 후보를 전부 찔러 보기 전에 /models 조회부터 한다");
+  {
+    // 정적 목록은 대부분 이 키에 없는 이름이다. 끝까지 다 찔러 보면 예산만 태우고,
+    // 정작 열려 있는 모델에는 닿지 못한 채 "AI 없음"으로 끝난다.
+    __resetGeminiState();
+    mockFetch(
+      (model) => (model === "gemini-3.9-flash-x" || model === "gemini-2.0-flash" ? { status: 200 } : { status: 404 }),
+      ["gemini-3.9-flash-x"],
+    );
+    const r = await generateText(baseOpts);
+    assert(r.model === "gemini-3.9-flash-x", `조회된 모델이 정적 후보보다 먼저 (${r.model})`);
+    assert(
+      !calls.includes("gemini-2.0-flash"),
+      "조회로 답을 받았으니 정적 후보(200을 줄 수 있는 gemini-2.0-flash)까지 가지 않았다",
+    );
+  }
+
+  console.log("\n[7d] 시간 초과한 모델은 다음 요청에서 뒤로 미룬다");
+  {
+    // 굼뜬 모델을 매번 맨 앞에서 부르면 그 한 번에 예산을 다 쓴다 — 폐기는 아니니
+    // 후보에서 빼지는 않고 순서만 뒤로 민다.
+    __resetGeminiState();
+    calls = [];
+    globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+      const href = typeof url === "string" ? url : url.toString();
+      if (href.endsWith("/models")) {
+        calls.push("LIST");
+        return new Response(JSON.stringify({ models: [] }), { status: 200 });
+      }
+      const model = decodeURIComponent(href.split("/models/")[1]?.split(":")[0] ?? "unknown");
+      calls.push(model);
+      // 핀만 응답 없이 늘어진다. 나머지는 한도 초과 → 이번 요청은 통째로 실패한다.
+      if (model !== PINNED_NEWEST) return new Response("{}", { status: 429 });
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        });
+      });
+    }) as typeof fetch;
+
+    try {
+      await generateText({ ...baseOpts, deadlineMs: 4_000, attemptCapMs: 400 });
+    } catch {
+      /* 전부 실패가 맞다 */
+    }
+    assert(calls[0] === PINNED_NEWEST, "1차: 핀부터 시도했다");
+
+    mockFetch(() => ({ status: 200 }));
+    const r = await generateText(baseOpts);
+    assert(calls[0] === LATEST_ALIAS, `2차: 굼떴던 핀 대신 별칭부터 (${calls[0]})`);
+    assert(r.model === LATEST_ALIAS, "다음 후보로 답을 받아냈다");
   }
 
   console.log("\n[8] 전부 실패하면 사람이 읽을 수 있는 에러");

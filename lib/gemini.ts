@@ -3,7 +3,10 @@
  *
  * 설계 이유:
  *  - 모델명을 하나만 박아 두면 구글이 조용히 폐기했을 때 404를 맞는다. 그래서 최신 핀 →
- *    최신 별칭(gemini-flash-latest) → 정적 후보 → 실제 사용 가능 모델 조회 순으로 폴백한다.
+ *    최신 별칭(gemini-flash-latest) → **이 키로 실제 열려 있는 모델(최신순)** → 정적
+ *    후보 순으로 폴백한다. 목표는 "최신 모델을 쓰는 것"이 아니라 "무엇이든 하나는 답하는 것"이다.
+ *  - 조회(/models)를 정적 후보보다 먼저 본다. 정적 목록은 대부분 이 키에 없는 이름이라,
+ *    끝까지 다 찔러 보면 예산만 태우고 정작 열려 있는 모델에는 닿지 못한다.
  *  - 전체 시도에 시간 예산을 둬서 Vercel 함수 타임아웃 전에 반드시 반환한다.
  *  - 실패하면 왜 실패했는지를 시도 로그로 남긴다. AI 문장이 안 나올 때 "그냥 안 됨"으로
  *    끝나면 원인을 화면에서도 로그에서도 알 수 없다 (summarizeAttempts).
@@ -97,20 +100,30 @@ export function attemptBudget(remainingMs: number, capMs?: number): number {
 }
 
 const NON_CHAT =
-  /tts|embed|image|imagen|veo|lyria|audio|live|robotics|computer-use|native-audio/i;
+  /tts|embed|image|imagen|veo|lyria|audio|live|robotics|computer-use|native-audio|aqa|bison|gecko/i;
 
+/**
+ * 문장을 만들어 줄 수 있는 모델인가.
+ *
+ * 예전에는 이름에 gemini가 없으면 전부 걸렀다. 그러면 키에 gemma밖에 안 열려 있는 계정에서
+ * "쓸 수 있는 모델이 하나도 없다"가 된다 — 이 앱이 시키는 일은 서버가 계산해 둔 숫자를
+ * 한국어 문장으로 옮기는 것뿐이라 어떤 모델이든 된다. 못 쓰는 종류(TTS·이미지·임베딩)만 뺀다.
+ */
 export function isUsableChatModel(name: string): boolean {
-  if (!name || !name.toLowerCase().includes("gemini")) return false;
+  if (!name) return false;
   return !NON_CHAT.test(name);
 }
 
+/**
+ * 어느 급을 먼저 부를까. 0=flash 계열, 1=그 밖의 gemini, 2=pro(느리다), 3=gemini가 아닌 것.
+ * 같은 급 안에서는 버전이 높은 쪽(=최신)을 먼저 쓴다.
+ */
 function rankChatModel(name: string): number {
   const n = name.toLowerCase();
-  if (n.includes("lite") && n.includes("latest")) return 0;
-  if (n.includes("flash") && n.includes("latest")) return 1;
-  if (n.includes("lite") && n.includes("flash")) return 2;
-  if (n.includes("flash")) return 3;
-  return 4;
+  if (!n.includes("gemini")) return 3;
+  if (n.includes("pro")) return 2;
+  if (n.includes("flash") || n.includes("lite")) return 0;
+  return 1;
 }
 
 /** 이름에 박힌 버전 (gemini-3.8-flash → 3.8). 같은 등급이면 높은 쪽을 먼저 쓴다. */
@@ -125,6 +138,11 @@ export function modelVersion(name: string): number {
 let workingModel: string | null = null;
 /** 404 등으로 폐기가 확인된 모델. 다시 시도하지 않는다. */
 const deadModels = new Set<string>();
+/**
+ * 시간 예산 안에 답하지 못한 모델. 폐기는 아니라서 후보에서 빼지는 않고 뒤로 미룬다.
+ * 굼뜬 모델을 매번 맨 앞에서 부르면 그 한 번에 예산을 다 쓰고 아무 문장도 못 받는다.
+ */
+const slowModels = new Set<string>();
 /** /models 조회 결과 캐시. */
 let discoveredModels: string[] | null = null;
 
@@ -132,11 +150,27 @@ let discoveredModels: string[] | null = null;
 export function __resetGeminiState(): void {
   workingModel = null;
   deadModels.clear();
+  slowModels.clear();
   discoveredModels = null;
 }
 
 export function getWorkingModel(): string | null {
   return workingModel;
+}
+
+/** 진단용 — 이 인스턴스가 지금까지 알아낸 것. */
+export function geminiState(): {
+  workingModel: string | null;
+  dead: string[];
+  slow: string[];
+  discovered: string[] | null;
+} {
+  return {
+    workingModel,
+    dead: [...deadModels],
+    slow: [...slowModels],
+    discovered: discoveredModels,
+  };
 }
 
 export class GeminiError extends Error {
@@ -207,17 +241,25 @@ function deadlineFromEnv(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_DEADLINE_MS;
 }
 
-/** 시도 순서: 마지막 성공 모델 → 최신 핀 → 최신 별칭 → 정적 후보. 폐기된 건 건너뛴다. */
-function candidateOrder(): string[] {
-  const ordered = [workingModel, PINNED_NEWEST, LATEST_ALIAS, ...STATIC_CANDIDATES];
+/**
+ * 폐기된 모델을 빼고, 굼떴던 모델은 뒤로 미루고, 중복을 없앤다.
+ * 순서 자체는 호출부가 정한다 (아는 것 → 조회한 것 → 정적 후보).
+ */
+function usable(models: (string | null)[], skip?: Set<string>): string[] {
   const seen = new Set<string>();
-  const out: string[] = [];
-  for (const m of ordered) {
-    if (!m || seen.has(m) || deadModels.has(m)) continue;
+  const fast: string[] = [];
+  const slow: string[] = [];
+  for (const m of models) {
+    if (!m || seen.has(m) || deadModels.has(m) || skip?.has(m)) continue;
     seen.add(m);
-    out.push(m);
+    (slowModels.has(m) ? slow : fast).push(m);
   }
-  return out;
+  return [...fast, ...slow];
+}
+
+/** 1순위: 이 인스턴스가 아는 것 + 손으로 박아 둔 최신. */
+function knownCandidates(): string[] {
+  return usable([workingModel, PINNED_NEWEST, LATEST_ALIAS]);
 }
 
 /** 이번 호출에 어떤 선택 필드를 실을지. 400을 받으면 하나씩 빼고 다시 시도한다. */
@@ -322,7 +364,7 @@ async function callModel(
   }
 }
 
-/** 정적 후보가 전부 막혔을 때, 이 키로 실제 쓸 수 있는 모델을 조회한다. */
+/** 이 키로 실제 쓸 수 있는 모델 목록. 정적 후보를 다 찔러 보기 전에 여기부터 본다. */
 async function discoverModels(apiKey: string, timeoutMs: number): Promise<string[]> {
   if (discoveredModels) return discoveredModels;
 
@@ -344,8 +386,8 @@ async function discoverModels(apiKey: string, timeoutMs: number): Promise<string
       .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
       .map((m) => (m.name ?? "").replace(/^models\//, ""))
       .filter(isUsableChatModel)
-      // 등급(flash 우선) → 버전 높은 순. 등급을 먼저 보는 이유: pro는 느리고 비싸서
-      // 아무리 최신이어도 이 앱의 시간 예산에 안 맞는다.
+      // 등급(flash 우선) → 버전 높은 순(=최신). 등급을 먼저 보는 이유: pro는 느려서
+      // 아무리 최신이어도 이 앱의 시간 예산에 안 맞는다 — 그래도 목록에는 남겨 둔다.
       .sort(
         (a, b) =>
           rankChatModel(a) - rankChatModel(b) ||
@@ -353,8 +395,10 @@ async function discoverModels(apiKey: string, timeoutMs: number): Promise<string
           a.localeCompare(b),
       );
 
-    discoveredModels = usable;
-    return discoveredModels;
+    // 빈 결과는 캐시하지 않는다. 조회가 한 번 삐끗한 것뿐인데 인스턴스가 살아 있는 내내
+    // "쓸 모델 없음"으로 굳어 버리면, 그 뒤 요청은 전부 AI 없이 끝난다.
+    if (usable.length) discoveredModels = usable;
+    return usable;
   } catch {
     return [];
   } finally {
@@ -363,10 +407,11 @@ async function discoverModels(apiKey: string, timeoutMs: number): Promise<string
 }
 
 /**
- * 폴백 체인을 따라 첫 성공을 반환한다.
+ * 폴백 체인을 따라 첫 성공을 반환한다. 최신을 선호하되, 답만 받으면 어느 모델이든 좋다.
  *  - 429 → 재시도 없이 바로 다음 모델
  *  - 5xx → 같은 모델 한 번만 재시도 (순간 장애)
  *  - 404 → 폐기 처리하고 다음 모델
+ *  - 시간 초과 → 이 인스턴스에서는 뒤로 미룸(다음 요청 때 맨 앞에서 또 예산을 태우지 않게)
  *  - 시간 예산 소진 → 즉시 중단
  */
 export async function generateText(opts: GenerateOptions): Promise<GenerateResult> {
@@ -458,6 +503,9 @@ export async function generateText(opts: GenerateOptions): Promise<GenerateResul
 
       if (out.kind === "timeout") {
         attempts.push({ model, outcome: "timeout" });
+        // 폐기는 아니다. 다만 이 인스턴스에서는 뒤로 미룬다.
+        slowModels.add(model);
+        if (workingModel === model) workingModel = null;
         return null;
       }
 
@@ -470,23 +518,34 @@ export async function generateText(opts: GenerateOptions): Promise<GenerateResul
     }
   }
 
-  // 1) 마지막 성공 모델 → 최신 별칭 → 정적 후보
-  for (const model of candidateOrder()) {
-    const hit = await tryOne(model);
-    if (hit) return hit;
-    if (remaining() <= 500) break;
-  }
-
-  // 2) 그래도 막히면 실제 쓸 수 있는 모델을 조회해서 시도
-  if (remaining() > 1_000) {
-    const tried = new Set(attempts.map((a) => a.model));
-    const found = await discoverModels(opts.apiKey, Math.min(remaining(), 4_000));
-    for (const model of found) {
-      if (tried.has(model) || deadModels.has(model)) continue;
+  const tried = new Set<string>();
+  async function run(models: string[]): Promise<GenerateResult | null> {
+    for (const model of models) {
+      if (tried.has(model)) continue;
+      tried.add(model);
       const hit = await tryOne(model);
       if (hit) return hit;
-      if (remaining() <= 500) break;
+      if (remaining() <= 500) return null;
     }
+    return null;
+  }
+
+  // 1) 아는 것부터: 마지막 성공 모델 → 최신 핀 → 최신 별칭
+  const known = await run(knownCandidates());
+  if (known) return known;
+
+  // 2) 이 키로 실제 열려 있는 모델 (flash 우선, 같은 급이면 최신순).
+  //    정적 후보보다 먼저 본다 — 정적 목록은 대부분 이 키에 없는 이름이라 404만 줍는다.
+  if (remaining() > 1_500) {
+    const found = await discoverModels(opts.apiKey, Math.min(remaining(), 4_000));
+    const hit = await run(usable(found, tried));
+    if (hit) return hit;
+  }
+
+  // 3) 조회까지 막혔을 때의 최후 수단
+  if (remaining() > 500) {
+    const hit = await run(usable(STATIC_CANDIDATES, tried));
+    if (hit) return hit;
   }
 
   const rateLimited = attempts.some((a) => a.outcome === "rate_limited");
