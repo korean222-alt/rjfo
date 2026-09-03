@@ -31,11 +31,15 @@ export type CandleRequest = {
 export type CandleAnswer = { answer: string; model: string | null };
 
 /** 이미 받아둔 리포트에 대한 후속 질문. 시세도 채점도 다시 하지 않는다. */
-export async function askCandle(question: string, facts: string): Promise<CandleAnswer> {
+export async function askCandle(
+  question: string,
+  facts: string,
+  opts?: { summary?: boolean },
+): Promise<CandleAnswer> {
   const res = await fetch("/api/candle/ask", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, facts }),
+    body: JSON.stringify({ question, facts, ...(opts?.summary ? { mode: "summary" } : {}) }),
   });
   const text = await res.text();
   let body: { answer?: string; model?: string; error?: string } = {};

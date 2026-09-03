@@ -69,6 +69,8 @@ export default function CyclePage() {
   const [tf, setTf] = useState<ChartTf>("1d");
   /** '숫자만 100%'인 지표들은 기본으로 접어 둔다. 펼치는 건 사용자가 정한다. */
   const [showNoise, setShowNoise] = useState(false);
+  /** AI 요약을 뒤따라 받아오는 중인가. 리포트는 이미 화면에 떠 있다. */
+  const [aiBusy, setAiBusy] = useState(false);
   const chartRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -89,6 +91,32 @@ export default function CyclePage() {
     }
     // 최초 1회만.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * AI 요약은 화면이 뜬 뒤에 따로 받아 온다.
+   *
+   * 예전에는 /api/cycle이 이걸 기다렸다가 응답했다. 모델이 굼뜬 날이면(실측: 32토큰
+   * 한마디에 6~10초) 이미 계산이 끝난 리포트가 그만큼 늦게 떴다. 요약은 읽어도 그만
+   * 안 읽어도 그만인 문장이고, 숫자는 요약과 무관하게 나와 있다 — 기다릴 이유가 없다.
+   */
+  const summarize = useCallback(async (p: CyclePayload) => {
+    setAiBusy(true);
+    try {
+      const { answer, model } = await askCycle(
+        `${p.report.ticker}는 과거 상승장이 올 때 어떤 지표들이 공통으로 신호를 줬어?`,
+        factsForLlm(p.report),
+        { summary: true },
+      );
+      const next = { ...p, reply: answer, model, aiError: null };
+      setPayload(next);
+      saveCycle(next);
+    } catch (e) {
+      // 실패해도 화면은 그대로다 — 서버 요약문이 이미 자리를 지키고 있다.
+      setPayload({ ...p, aiError: (e as Error).message });
+    } finally {
+      setAiBusy(false);
+    }
   }, []);
 
   const run = useCallback(
@@ -117,13 +145,14 @@ export default function CyclePage() {
         setQa(null);
         setAskError(null);
         saveCycle(next);
+        void summarize(next);
       } catch (e) {
         setError((e as Error).message);
       } finally {
         setBusy(null);
       }
     },
-    [bearPct, bullPct, ticker],
+    [bearPct, bullPct, summarize, ticker],
   );
 
   const report = payload?.report ?? null;
@@ -437,16 +466,20 @@ export default function CyclePage() {
                     : "border-border text-muted"
                 }`}
               >
-                {payload.model ? modelLabel(payload.model) : "AI 없음 · 서버 요약문"}
+                {aiBusy
+                  ? "AI 문장 받는 중…"
+                  : payload.model
+                    ? modelLabel(payload.model)
+                    : "AI 없음 · 서버 요약문"}
               </span>
             </div>
             <p className="mt-2 text-sm leading-relaxed">{payload.reply}</p>
             {payload.aiError ? (
               <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-relaxed text-amber-200/90">
-                위 문장은 <b>AI가 아니라 서버가 만든 요약문</b>입니다. AI를 못 쓴 이유:{" "}
+                위 문장은 <b>AI가 아니라 서버가 만든 요약문</b>입니다. AI 문장은 못 받았습니다:{" "}
                 {payload.aiError}
                 <br />
-                아래의 숫자·등급·차트는 AI와 무관하게 그대로 계산된 값입니다.
+                숫자·등급·차트는 AI와 무관하게 이미 계산돼 있습니다 — 이것 때문에 늦어지는 건 없습니다.
               </p>
             ) : null}
             {qa ? (

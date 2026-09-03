@@ -70,6 +70,8 @@ export default function CandlePage() {
   const [qa, setQa] = useState<{ q: string; a: string; model: string | null } | null>(null);
   const [asking, setAsking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
+  /** AI 요약을 뒤따라 받아오는 중인가. 리포트는 이미 화면에 떠 있다. */
+  const [aiBusy, setAiBusy] = useState(false);
   const chartRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -89,6 +91,25 @@ export default function CandlePage() {
     }
     // 최초 1회만.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** AI 요약은 화면이 뜬 뒤에 따로 받아 온다 (사이클 탭과 같은 이유 — 리포트를 막지 않는다). */
+  const summarize = useCallback(async (p: CandlePayload) => {
+    setAiBusy(true);
+    try {
+      const { answer, model } = await askCandle(
+        `${p.report.ticker}는 어떤 캔들이 나오면 오르는 편이야? 지금 마지막 봉은 어때?`,
+        factsForLlm(p.report),
+        { summary: true },
+      );
+      const next = { ...p, reply: answer, model, aiError: null };
+      setPayload(next);
+      saveCandle(next);
+    } catch (e) {
+      setPayload({ ...p, aiError: (e as Error).message });
+    } finally {
+      setAiBusy(false);
+    }
   }, []);
 
   const run = useCallback(
@@ -112,13 +133,14 @@ export default function CandlePage() {
         setQa(null);
         setAskError(null);
         saveCandle(next);
+        void summarize(next);
       } catch (e) {
         setError((e as Error).message);
       } finally {
         setBusy(null);
       }
     },
-    [horizon, ticker],
+    [horizon, summarize, ticker],
   );
 
   const report = payload?.report ?? null;
@@ -278,16 +300,20 @@ export default function CandlePage() {
                     : "border-border text-muted"
                 }`}
               >
-                {payload.model ? modelLabel(payload.model) : "AI 없음 · 서버 요약문"}
+                {aiBusy
+                  ? "AI 문장 받는 중…"
+                  : payload.model
+                    ? modelLabel(payload.model)
+                    : "AI 없음 · 서버 요약문"}
               </span>
             </div>
             <p className="mt-2 text-sm leading-relaxed">{payload.reply}</p>
             {payload.aiError ? (
               <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-relaxed text-amber-200/90">
-                위 문장은 <b>AI가 아니라 서버가 만든 요약문</b>입니다. AI를 못 쓴 이유:{" "}
+                위 문장은 <b>AI가 아니라 서버가 만든 요약문</b>입니다. AI 문장은 못 받았습니다:{" "}
                 {payload.aiError}
                 <br />
-                아래의 숫자·등급·차트는 AI와 무관하게 그대로 계산된 값입니다.
+                숫자·등급·차트는 AI와 무관하게 이미 계산돼 있습니다 — 이것 때문에 늦어지는 건 없습니다.
               </p>
             ) : null}
             {qa ? (

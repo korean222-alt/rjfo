@@ -1,9 +1,8 @@
 import { json } from "@/lib/json-response";
 import { MAX_YEARS, loadBars } from "@/lib/data";
 import { DataProviderError, isValidTicker, normalizeTicker } from "@/lib/data/provider";
-import { generateText, GeminiError, summarizeAttempts } from "@/lib/gemini";
 import { enrich } from "@/lib/indicators";
-import { analyzeCandles, factsForLlm, CANDLE_HORIZONS, type CandleHorizon } from "@/lib/candle";
+import { analyzeCandles, CANDLE_HORIZONS, type CandleHorizon } from "@/lib/candle";
 import { narrate } from "@/lib/candle/narrative";
 import { BarValidationError, validateBars } from "@/lib/validate-bars";
 
@@ -17,57 +16,6 @@ export const maxDuration = 60;
  * 400봉(약 1년 반)이 그 최소선이다.
  */
 const MIN_BARS = 400;
-
-const SYSTEM = `너는 한국 주식·코인 차트 비서다.
-주어진 FACTS의 숫자와 날짜만 사용한다. 없는 값을 지어내지 마라.
-5~8문장 한국어. 다음을 반드시 포함한다:
-- 이 종목의 기저율(아무 날이나 샀을 때의 상승 확률·평균 수익)을 먼저 말한다
-- 여섯 관문을 다 통과한 A등급 캔들 패턴이 있는지, 있다면 무엇이고 적중률이 기저보다 몇 %p 높은지
-  (하나도 없으면 "근거가 데이터에 없다"고 분명히 말한다)
-- 마지막 봉이 어떤 모양이고 지금 무슨 패턴이 떠 있는지
-- 그 패턴의 과거 성적이 무엇이었는지 (평균 수익과 적중률을 기저와 나란히)
-캔들 패턴의 효과는 원래 작다는 사실과, 이건 예언이 아니라 과거 같은 모양 뒤의 평균이라는 사실을
-마지막에 한 문장으로 덧붙인다. 매수·매도를 권하지 마라.`;
-
-/** 실패해도 리포트는 나가지만, 왜 실패했는지는 화면과 로그에 남긴다 (사이클 라우트와 동일). */
-type PolishResult = { text: string; model: string } | { error: string };
-
-// 서버 계산(5,040봉 · 지표 31개 채점)은 0.5초면 끝난다. 60초 함수 한도에서 시세 로딩
-// 몇 초를 빼도 20초 이상이 남으므로, 느린 모델을 기다려 주는 쪽이 이득이다 —
-// 실패하면 어차피 서버 요약문으로 떨어질 뿐 화면이 비지는 않는다.
-const AI_DEADLINE_MS = 22_000;
-
-async function polish(facts: string, question: string): Promise<PolishResult> {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!apiKey) return { error: "서버에 GEMINI_API_KEY가 없습니다." };
-  try {
-    const { text, model } = await generateText({
-      apiKey,
-      system: SYSTEM,
-      prompt: `사용자: ${question}\n\nFACTS:\n${facts}\n\n이 FACTS만 가지고 답해라.`,
-      json: false,
-      maxOutputTokens: 700,
-      deadlineMs: AI_DEADLINE_MS,
-    });
-    const trimmed = text.trim();
-    // JSON을 그대로 뱉거나 너무 짧으면 템플릿 문장이 낫다.
-    if (trimmed.startsWith("{") || trimmed.startsWith("```") || trimmed.length < 60) {
-      const why = `${model}이 문장 대신 ${trimmed.length}자짜리 조각을 돌려줬습니다.`;
-      console.warn(`[candle] AI 응답이 문장이 아님 · facts ${facts.length}자 · ${why}`);
-      return { error: why };
-    }
-    return { text: trimmed, model };
-  } catch (e) {
-    if (e instanceof GeminiError) {
-      const detail = summarizeAttempts(e.attempts);
-      console.warn(`[candle] Gemini 실패 · facts ${facts.length}자 · ${e.message} · ${detail}`);
-      return { error: `${e.message} (${detail})` };
-    }
-    const msg = (e as Error).message;
-    console.warn(`[candle] Gemini 예외 · facts ${facts.length}자 · ${msg}`);
-    return { error: `AI 호출 중 오류: ${msg}` };
-  }
-}
 
 /** 큰 값은 소수점을 줄인다. 67234.5678 → 67234.6, 0.00012345 → 0.00012345 */
 function round(v: number): number {
@@ -132,15 +80,9 @@ export async function POST(req: Request) {
     const report = analyzeCandles(ticker, enriched, { horizon: clampHorizon(body.horizon) });
 
     const fallbackText = narrate(report);
-    const question =
-      typeof body.question === "string" && body.question.trim()
-        ? body.question.trim().slice(0, 300)
-        : `${ticker}는 어떤 캔들이 나오면 오르는 편이야? 지금 마지막 봉은 어때?`;
-    const polished = await polish(factsForLlm(report), question);
-    const ok = "text" in polished ? polished : null;
-    const reply = ok?.text ?? fallbackText;
-    const model = ok?.model ?? null;
-    const aiError = "error" in polished ? polished.error : null;
+    // 서버가 만든 요약문을 그대로 내보낸다. AI 문장은 화면이 뜬 뒤에 /ask 로 따로 받는다 —
+    // 여기서 기다리면 모델이 굼뜬 날 리포트 전체가 그만큼 늦게 뜬다(실제로 20초씩 걸렸다).
+    const reply = fallbackText;
 
     // 차트용 시계열. 캔들을 브라우저에서 그리려면 OHLCV가 다 필요하다.
     const series = enriched.map((b) => ({
@@ -152,7 +94,7 @@ export async function POST(req: Request) {
       volume: Math.round(b.volume),
     }));
 
-    return json({ report, series, reply, fallbackText, model, aiError });
+    return json({ report, series, reply, fallbackText, model: null, aiError: null });
   } catch (e) {
     if (e instanceof DataProviderError) return json({ error: e.message }, { status: e.status });
     return json({ error: `분석 중 오류가 발생했습니다: ${(e as Error).message}` }, { status: 500 });

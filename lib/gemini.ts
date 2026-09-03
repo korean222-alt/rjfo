@@ -85,7 +85,10 @@ const PER_ATTEMPT_MIN_MS = 5_500;
 const PER_ATTEMPT_MAX_MS = 14_000;
 const NEXT_MODEL_RESERVE_MS = 2_000;
 
-export function attemptBudget(remainingMs: number): number {
+export function attemptBudget(remainingMs: number, capMs?: number): number {
+  // 호출부가 상한을 직접 정하면 그걸 쓴다. "느리면 기다리지 말고 바로 다음 모델"이
+  // 필요한 화면(자동 요약)과 "느려도 기다리는 게 나은" 화면(사용자가 누른 질문)이 다르다.
+  if (capMs != null) return Math.max(1, Math.min(remainingMs, capMs));
   const wanted = Math.max(
     PER_ATTEMPT_MIN_MS,
     Math.min(PER_ATTEMPT_MAX_MS, remainingMs - NEXT_MODEL_RESERVE_MS),
@@ -185,6 +188,11 @@ export type GenerateOptions = {
   json?: boolean;
   /** 전체 시간 예산. 기본 AI_DEADLINE_MS 환경변수 → 15초. */
   deadlineMs?: number;
+  /**
+   * 모델 하나에 줄 시간의 상한. 지정하면 적응형 계산 대신 이 값을 쓴다.
+   * 짧게 주면 "최신 모델을 먼저 찔러 보고 굼뜨면 즉시 구형으로" 가 된다.
+   */
+  attemptCapMs?: number;
 };
 
 export type GenerateResult = {
@@ -383,7 +391,7 @@ export async function generateText(opts: GenerateOptions): Promise<GenerateResul
         return null;
       }
 
-      const out = await callModel(model, opts, mode, attemptBudget(left));
+      const out = await callModel(model, opts, mode, attemptBudget(left, opts.attemptCapMs));
 
       if (out.kind === "ok") {
         if (!out.text) {

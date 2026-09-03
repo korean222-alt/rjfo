@@ -15,6 +15,18 @@ export const maxDuration = 30;
 const MAX_FACTS = 40_000;
 const MAX_QUESTION = 300;
 
+/** 화면이 뜰 때 자동으로 붙는 요약 (사이클 탭과 같은 구조 — 리포트를 막지 않는다). */
+const SYSTEM_SUMMARY = `너는 한국 주식·코인 차트 비서다.
+주어진 FACTS의 숫자와 날짜만 사용한다. 없는 값을 지어내지 마라.
+5~8문장 한국어. 다음을 반드시 포함한다:
+- 이 종목의 기저율(아무 날이나 샀을 때의 상승 확률·평균 수익)을 먼저 말한다
+- 여섯 관문을 다 통과한 A등급 캔들 패턴이 있는지, 있다면 무엇이고 적중률이 기저보다 몇 %p 높은지
+  (하나도 없으면 "근거가 데이터에 없다"고 분명히 말한다)
+- 마지막 봉이 어떤 모양이고 지금 무슨 패턴이 떠 있는지
+- 그 패턴의 과거 성적이 무엇이었는지 (평균 수익과 적중률을 기저와 나란히)
+캔들 패턴의 효과는 원래 작다는 사실과, 이건 예언이 아니라 과거 같은 모양 뒤의 평균이라는 사실을
+마지막에 한 문장으로 덧붙인다. 매수·매도를 권하지 마라.`;
+
 const SYSTEM = `너는 한국 주식·코인 차트 비서다. 사용자의 캔들 관련 질문에 답하는 게 유일한 임무다.
 
 규칙:
@@ -28,7 +40,7 @@ const SYSTEM = `너는 한국 주식·코인 차트 비서다. 사용자의 캔�
 - 캔들 패턴은 과거 같은 모양 뒤의 평균일 뿐 예언이 아니라는 점을 필요할 때 짧게 덧붙인다.`;
 
 export async function POST(req: Request) {
-  let body: { question?: unknown; facts?: unknown };
+  let body: { question?: unknown; facts?: unknown; mode?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -37,6 +49,7 @@ export async function POST(req: Request) {
 
   const question = typeof body.question === "string" ? body.question.trim().slice(0, MAX_QUESTION) : "";
   const facts = typeof body.facts === "string" ? body.facts.slice(0, MAX_FACTS) : "";
+  const summary = body.mode === "summary";
   if (!question) return json({ error: "질문을 입력해 주세요." }, { status: 400 });
   if (!facts) return json({ error: "먼저 종목을 분석해 주세요." }, { status: 400 });
 
@@ -51,11 +64,14 @@ export async function POST(req: Request) {
   try {
     const { text, model } = await generateText({
       apiKey,
-      system: SYSTEM,
-      prompt: `질문: ${question}\n\nFACTS:\n${facts}\n\n이 FACTS만 가지고 질문에 답해라.`,
+      system: summary ? SYSTEM_SUMMARY : SYSTEM,
+      prompt: summary
+        ? `사용자: ${question}\n\nFACTS:\n${facts}\n\n이 FACTS만 가지고 답해라.`
+        : `질문: ${question}\n\nFACTS:\n${facts}\n\n이 FACTS만 가지고 질문에 답해라.`,
       json: false,
-      maxOutputTokens: 600,
-      deadlineMs: 18_000,
+      maxOutputTokens: summary ? 700 : 600,
+      deadlineMs: summary ? 15_000 : 18_000,
+      ...(summary ? { attemptCapMs: 7_000 } : {}),
     });
     const answer = text.trim();
     if (!answer || answer.startsWith("{") || answer.startsWith("```")) {
