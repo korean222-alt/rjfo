@@ -1,7 +1,7 @@
 import { json } from "@/lib/json-response";
 import { MAX_YEARS, loadBars } from "@/lib/data";
 import { DataProviderError, isValidTicker, normalizeTicker } from "@/lib/data/provider";
-import { generateText, GeminiError } from "@/lib/gemini";
+import { generateText, GeminiError, summarizeAttempts } from "@/lib/gemini";
 import { enrich } from "@/lib/indicators";
 import { analyzeCandles, factsForLlm, CANDLE_HORIZONS, type CandleHorizon } from "@/lib/candle";
 import { narrate } from "@/lib/candle/narrative";
@@ -29,12 +29,14 @@ const SYSTEM = `너는 한국 주식·코인 차트 비서다.
 캔들 패턴의 효과는 원래 작다는 사실과, 이건 예언이 아니라 과거 같은 모양 뒤의 평균이라는 사실을
 마지막에 한 문장으로 덧붙인다. 매수·매도를 권하지 마라.`;
 
-async function polish(
-  facts: string,
-  question: string,
-): Promise<{ text: string; model: string } | null> {
+/** 실패해도 리포트는 나가지만, 왜 실패했는지는 화면과 로그에 남긴다 (사이클 라우트와 동일). */
+type PolishResult = { text: string; model: string } | { error: string };
+
+const AI_DEADLINE_MS = 16_000;
+
+async function polish(facts: string, question: string): Promise<PolishResult> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey) return { error: "서버에 GEMINI_API_KEY가 없습니다." };
   try {
     const { text, model } = await generateText({
       apiKey,
@@ -42,15 +44,25 @@ async function polish(
       prompt: `사용자: ${question}\n\nFACTS:\n${facts}\n\n이 FACTS만 가지고 답해라.`,
       json: false,
       maxOutputTokens: 700,
-      deadlineMs: 9_000,
+      deadlineMs: AI_DEADLINE_MS,
     });
     const trimmed = text.trim();
     // JSON을 그대로 뱉거나 너무 짧으면 템플릿 문장이 낫다.
-    if (trimmed.startsWith("{") || trimmed.startsWith("```") || trimmed.length < 60) return null;
+    if (trimmed.startsWith("{") || trimmed.startsWith("```") || trimmed.length < 60) {
+      const why = `${model}이 문장 대신 ${trimmed.length}자짜리 조각을 돌려줬습니다.`;
+      console.warn(`[candle] AI 응답이 문장이 아님 · facts ${facts.length}자 · ${why}`);
+      return { error: why };
+    }
     return { text: trimmed, model };
   } catch (e) {
-    if (e instanceof GeminiError) return null;
-    return null;
+    if (e instanceof GeminiError) {
+      const detail = summarizeAttempts(e.attempts);
+      console.warn(`[candle] Gemini 실패 · facts ${facts.length}자 · ${e.message} · ${detail}`);
+      return { error: `${e.message} (${detail})` };
+    }
+    const msg = (e as Error).message;
+    console.warn(`[candle] Gemini 예외 · facts ${facts.length}자 · ${msg}`);
+    return { error: `AI 호출 중 오류: ${msg}` };
   }
 }
 
@@ -122,8 +134,10 @@ export async function POST(req: Request) {
         ? body.question.trim().slice(0, 300)
         : `${ticker}는 어떤 캔들이 나오면 오르는 편이야? 지금 마지막 봉은 어때?`;
     const polished = await polish(factsForLlm(report), question);
-    const reply = polished?.text ?? fallbackText;
-    const model = polished?.model ?? null;
+    const ok = "text" in polished ? polished : null;
+    const reply = ok?.text ?? fallbackText;
+    const model = ok?.model ?? null;
+    const aiError = "error" in polished ? polished.error : null;
 
     // 차트용 시계열. 캔들을 브라우저에서 그리려면 OHLCV가 다 필요하다.
     const series = enriched.map((b) => ({
@@ -135,7 +149,7 @@ export async function POST(req: Request) {
       volume: Math.round(b.volume),
     }));
 
-    return json({ report, series, reply, fallbackText, model });
+    return json({ report, series, reply, fallbackText, model, aiError });
   } catch (e) {
     if (e instanceof DataProviderError) return json({ error: e.message }, { status: e.status });
     return json({ error: `분석 중 오류가 발생했습니다: ${(e as Error).message}` }, { status: 500 });

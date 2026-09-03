@@ -11,9 +11,11 @@
  *  - 마지막 성공 모델을 기억해서 다음 요청에 먼저 쓰는가
  *  - 3.x에는 thinkingLevel:low를 싣고, 구형 모델에는 싣지 않는가
  *  - thinking 때문에 400이 나거나 응답이 비면 그 필드만 빼고 재시도하는가
- *  - 시간 예산을 넘기지 않는가
+ *  - 모델당 시간 예산이 남은 예산에 맞춰 늘어나는가 (6초 걸리는 응답도 받아내는가)
+ *  - 전체 시간 예산을 넘기지 않는가
  */
 import {
+  attemptBudget,
   generateText,
   getWorkingModel,
   GeminiError,
@@ -311,6 +313,48 @@ async function main() {
     const r = await generateText(baseOpts);
     assert(calls.filter((c) => c === PINNED_NEWEST).length === 2, "핀은 2회까지만");
     assert(r.model === LATEST_ALIAS, `다음 모델로 넘어감 (${r.model})`);
+  }
+
+  console.log("\n[13] 모델당 시간은 남은 예산에 맞춰 늘어난다");
+  {
+    // 5.5초 고정이던 시절엔 6초 걸리는 응답이 어떤 모델로도 성공할 수 없었다.
+    assert(attemptBudget(20_000) === 12_000, `넉넉하면 상한 12초 (${attemptBudget(20_000)})`);
+    assert(attemptBudget(9_000) === 7_000, `9초 예산 → 7초 (다음 후보용 2초 남김) (${attemptBudget(9_000)})`);
+    assert(attemptBudget(6_000) === 5_500, `빠듯하면 최소 5.5초 (${attemptBudget(6_000)})`);
+    assert(attemptBudget(3_000) === 3_000, `남은 게 최소보다 적으면 남은 만큼만 (${attemptBudget(3_000)})`);
+  }
+
+  console.log("\n[14] 6초 걸리는 모델도 성공한다 (예전엔 5.5초에서 잘렸다)");
+  {
+    __resetGeminiState();
+    calls = [];
+    globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+      const href = typeof url === "string" ? url : url.toString();
+      calls.push(href);
+      // 6초 뒤에 응답. 중간에 abort되면 그대로 실패한다.
+      return new Promise<Response>((resolve, reject) => {
+        const t = setTimeout(
+          () =>
+            resolve(
+              new Response(
+                JSON.stringify({ candidates: [{ content: { parts: [{ text: "느린 답" }] } }] }),
+                { status: 200, headers: { "Content-Type": "application/json" } },
+              ),
+            ),
+          6_000,
+        );
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(t);
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        });
+      });
+    }) as typeof fetch;
+
+    const r = await generateText({ ...baseOpts, deadlineMs: 16_000 });
+    assert(r.text === "느린 답", "6초짜리 응답을 받아냄");
+    assert(r.model === PINNED_NEWEST, "첫 모델에서 성공");
   }
 
   console.log("\n[9] 시간 예산을 넘기지 않음");

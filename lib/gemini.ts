@@ -2,10 +2,11 @@
  * Gemini 호출 레이어.
  *
  * 설계 이유:
- *  - 모델명을 버전 고정하면 구글이 조용히 폐기했을 때 404를 맞는다.
- *    그래서 항상 최신을 가리키는 별칭(gemini-flash-latest)을 최우선으로 쓴다.
- *  - 그 별칭마저 막히는 경우를 대비해 정적 후보 → 실제 사용 가능 모델 조회 순으로 폴백한다.
+ *  - 모델명을 하나만 박아 두면 구글이 조용히 폐기했을 때 404를 맞는다. 그래서 최신 핀 →
+ *    최신 별칭(gemini-flash-latest) → 정적 후보 → 실제 사용 가능 모델 조회 순으로 폴백한다.
  *  - 전체 시도에 시간 예산을 둬서 Vercel 함수 타임아웃 전에 반드시 반환한다.
+ *  - 실패하면 왜 실패했는지를 시도 로그로 남긴다. AI 문장이 안 나올 때 "그냥 안 됨"으로
+ *    끝나면 원인을 화면에서도 로그에서도 알 수 없다 (summarizeAttempts).
  */
 
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
@@ -69,7 +70,26 @@ export function supportsThinkingLevel(model: string): boolean {
 }
 
 const DEFAULT_DEADLINE_MS = 15_000;
-const PER_ATTEMPT_CAP_MS = 5_500;
+
+/**
+ * 모델 하나에 줄 시간.
+ *
+ * 예전에는 5.5초 고정이었다. 그러면 프롬프트가 큰 요청(사이클 리포트 전체를 넘기는
+ * 요약)에서 응답이 6초 걸리는 순간, 어떤 모델도 성공할 수 없다 — 후보를 아무리
+ * 늘려도 전부 5.5초에서 잘려 나가고, 사용자에게는 "AI만 안 되는" 화면이 남는다.
+ * 남은 예산에서 다음 후보용 여유만 떼고 나머지를 첫 모델에 몰아준다.
+ */
+const PER_ATTEMPT_MIN_MS = 5_500;
+const PER_ATTEMPT_MAX_MS = 12_000;
+const NEXT_MODEL_RESERVE_MS = 2_000;
+
+export function attemptBudget(remainingMs: number): number {
+  const wanted = Math.max(
+    PER_ATTEMPT_MIN_MS,
+    Math.min(PER_ATTEMPT_MAX_MS, remainingMs - NEXT_MODEL_RESERVE_MS),
+  );
+  return Math.min(remainingMs, wanted);
+}
 
 const NON_CHAT =
   /tts|embed|image|imagen|veo|lyria|audio|live|robotics|computer-use|native-audio/i;
@@ -131,6 +151,24 @@ export type AttemptLog = {
   status?: number;
   detail?: string;
 };
+
+/** 시도 결과를 사람 말로. 화면과 서버 로그에 같은 문장이 나가야 원인을 대조할 수 있다. */
+const OUTCOME_LABEL: Record<AttemptLog["outcome"], string> = {
+  ok: "성공",
+  rate_limited: "사용량 한도",
+  gone: "그런 모델 없음",
+  server_error: "구글 서버 오류",
+  bad_request: "요청 거절",
+  timeout: "시간 초과",
+  network: "네트워크 오류",
+};
+
+export function summarizeAttempts(attempts: AttemptLog[]): string {
+  if (!attempts.length) return "시도 기록 없음";
+  return attempts
+    .map((a) => `${a.model} → ${OUTCOME_LABEL[a.outcome]}${a.status ? ` ${a.status}` : ""}`)
+    .join(" · ");
+}
 
 export type GeminiTurn = { role: "user" | "model"; text: string };
 
@@ -343,7 +381,7 @@ export async function generateText(opts: GenerateOptions): Promise<GenerateResul
         return null;
       }
 
-      const out = await callModel(model, opts, mode, Math.min(left, PER_ATTEMPT_CAP_MS));
+      const out = await callModel(model, opts, mode, attemptBudget(left));
 
       if (out.kind === "ok") {
         if (!out.text) {

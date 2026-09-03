@@ -3,10 +3,13 @@ import { getProviders } from "@/lib/data";
 import { DataProviderError, isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import { fundingInstrument, probeFundingSources } from "@/lib/data/funding";
 import {
+  generateText,
+  GeminiError,
   getWorkingModel,
   LATEST_ALIAS,
   PINNED_NEWEST,
   STATIC_CANDIDATES,
+  summarizeAttempts,
 } from "@/lib/gemini";
 import { kvConfigured, kvSource } from "@/lib/kv";
 
@@ -15,13 +18,44 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
+ * 키가 실제로 어느 모델까지 닿는지 한 번 찔러본다 (`/api/diag?ai=1`).
+ *
+ * "AI가 안 뜬다"의 원인은 키 없음 / 한도 초과 / 그 모델이 이 키에 없음 / 너무 느림 중
+ * 하나인데, 화면만 봐서는 구분이 안 된다. 짧은 프롬프트로 왕복 한 번을 재서 그대로 보여준다.
+ */
+async function probeAi(): Promise<Record<string, unknown>> {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  if (!apiKey) return { ok: false, error: "GEMINI_API_KEY가 없습니다." };
+  const started = Date.now();
+  try {
+    const { text, model, attempts } = await generateText({
+      apiKey,
+      system: "한국어로 짧게 답한다.",
+      prompt: "연결 확인용이다. '연결됨'이라고만 답해라.",
+      maxOutputTokens: 32,
+      deadlineMs: 12_000,
+    });
+    return { ok: true, model, ms: Date.now() - started, reply: text.slice(0, 40), attempts };
+  } catch (e) {
+    const detail = e instanceof GeminiError ? summarizeAttempts(e.attempts) : "";
+    return {
+      ok: false,
+      ms: Date.now() - started,
+      error: (e as Error).message,
+      attempts: detail,
+    };
+  }
+}
+
+/**
  * 진단용. `/api/diag?ticker=NVDA` 를 열면 각 시세 소스가 실제로 뭘 돌려줬는지 보여준다.
  *
  * "429가 뜬다"는 화면만 보고는 어느 소스가 왜 막혔는지 알 수 없다. 배포 환경에서
  * 원인을 추측하지 않으려고 둔다. 계산은 하지 않고 소스 상태만 확인한다.
  */
 export async function GET(req: Request) {
-  const raw = new URL(req.url).searchParams.get("ticker") ?? "AAPL";
+  const params = new URL(req.url).searchParams;
+  const raw = params.get("ticker") ?? "AAPL";
   const ticker = normalizeTicker(raw);
   if (!isValidTicker(ticker)) {
     return json({ error: `'${ticker}'는 올바른 티커 형식이 아닙니다.` }, { status: 400 });
@@ -79,6 +113,7 @@ export async function GET(req: Request) {
     // 어떤 모델로 답하고 있는지. 화면의 모델 이름이 이상할 때 여기서 체인을 확인한다.
     // (workingModel은 이 람다 인스턴스가 마지막으로 성공한 모델이라 null일 수 있다.)
     ai: {
+      probe: params.get("ai") ? await probeAi() : "?ai=1 을 붙이면 실제로 한 번 호출해 봅니다.",
       pinned: PINNED_NEWEST,
       alias: LATEST_ALIAS,
       fallbacks: STATIC_CANDIDATES,

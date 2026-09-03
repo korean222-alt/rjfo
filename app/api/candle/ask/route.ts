@@ -6,7 +6,7 @@
  */
 
 import { json } from "@/lib/json-response";
-import { generateText, GeminiError } from "@/lib/gemini";
+import { generateText, GeminiError, summarizeAttempts } from "@/lib/gemini";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,7 +63,10 @@ export async function POST(req: Request) {
     }
     return json({ answer, model });
   } catch (e) {
+    // 어느 모델이 어떻게 실패했는지까지 돌려준다 — "실패했습니다"만으로는 손쓸 수가 없다.
+    const detail = e instanceof GeminiError ? summarizeAttempts(e.attempts) : "";
     const msg = e instanceof GeminiError ? e.message : (e as Error).message;
-    return json({ error: `AI 답변 실패: ${msg}` }, { status: 502 });
+    console.warn(`[candle/ask] Gemini 실패 · facts ${facts.length}자 · ${msg} · ${detail}`);
+    return json({ error: `AI 답변 실패: ${msg}${detail ? ` (${detail})` : ""}` }, { status: 502 });
   }
 }

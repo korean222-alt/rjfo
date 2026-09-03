@@ -441,6 +441,14 @@ export default function CyclePage() {
               </span>
             </div>
             <p className="mt-2 text-sm leading-relaxed">{payload.reply}</p>
+            {payload.aiError ? (
+              <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-relaxed text-amber-200/90">
+                위 문장은 <b>AI가 아니라 서버가 만든 요약문</b>입니다. AI를 못 쓴 이유:{" "}
+                {payload.aiError}
+                <br />
+                아래의 숫자·등급·차트는 AI와 무관하게 그대로 계산된 값입니다.
+              </p>
+            ) : null}
             {qa ? (
               <div className="mt-3 rounded-xl border border-border bg-bg px-3 py-2.5">
                 <p className="text-[11px] text-muted">Q. {qa.q}</p>

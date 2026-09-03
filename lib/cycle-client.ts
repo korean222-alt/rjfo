@@ -19,6 +19,8 @@ export type CyclePayload = {
   fallbackText: string;
   /** 요약을 만든 Gemini 모델. 키가 없거나 실패해서 템플릿 문장을 쓰면 null. */
   model?: string | null;
+  /** AI 문장을 못 만든 이유. 성공했으면 null. 숨기면 고장인지 정상인지 구분이 안 된다. */
+  aiError?: string | null;
 };
 
 export type CycleRequest = {
