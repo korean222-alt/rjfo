@@ -318,7 +318,7 @@ async function main() {
   console.log("\n[13] 모델당 시간은 남은 예산에 맞춰 늘어난다");
   {
     // 5.5초 고정이던 시절엔 6초 걸리는 응답이 어떤 모델로도 성공할 수 없었다.
-    assert(attemptBudget(20_000) === 12_000, `넉넉하면 상한 12초 (${attemptBudget(20_000)})`);
+    assert(attemptBudget(20_000) === 14_000, `넉넉하면 상한 14초 (${attemptBudget(20_000)})`);
     assert(attemptBudget(9_000) === 7_000, `9초 예산 → 7초 (다음 후보용 2초 남김) (${attemptBudget(9_000)})`);
     assert(attemptBudget(6_000) === 5_500, `빠듯하면 최소 5.5초 (${attemptBudget(6_000)})`);
     assert(attemptBudget(3_000) === 3_000, `남은 게 최소보다 적으면 남은 만큼만 (${attemptBudget(3_000)})`);

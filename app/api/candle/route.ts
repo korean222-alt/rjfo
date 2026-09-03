@@ -32,7 +32,10 @@ const SYSTEM = `너는 한국 주식·코인 차트 비서다.
 /** 실패해도 리포트는 나가지만, 왜 실패했는지는 화면과 로그에 남긴다 (사이클 라우트와 동일). */
 type PolishResult = { text: string; model: string } | { error: string };
 
-const AI_DEADLINE_MS = 16_000;
+// 서버 계산(5,040봉 · 지표 31개 채점)은 0.5초면 끝난다. 60초 함수 한도에서 시세 로딩
+// 몇 초를 빼도 20초 이상이 남으므로, 느린 모델을 기다려 주는 쪽이 이득이다 —
+// 실패하면 어차피 서버 요약문으로 떨어질 뿐 화면이 비지는 않는다.
+const AI_DEADLINE_MS = 22_000;
 
 async function polish(facts: string, question: string): Promise<PolishResult> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;

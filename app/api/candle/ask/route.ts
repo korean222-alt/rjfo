@@ -55,7 +55,7 @@ export async function POST(req: Request) {
       prompt: `질문: ${question}\n\nFACTS:\n${facts}\n\n이 FACTS만 가지고 질문에 답해라.`,
       json: false,
       maxOutputTokens: 600,
-      deadlineMs: 12_000,
+      deadlineMs: 18_000,
     });
     const answer = text.trim();
     if (!answer || answer.startsWith("{") || answer.startsWith("```")) {

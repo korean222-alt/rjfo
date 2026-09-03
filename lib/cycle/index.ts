@@ -423,7 +423,13 @@ export function factsForLlm(report: CycleReport, topN = 6): string {
     "상승장시작부근이_전체기간에서_차지하는비율": Math.round(report.windowSharePct),
     상위지표: top,
     전사이클적중지표: report.commonKeys.length,
-    "A등급(여섯관문통과)": report.signals.filter((s) => s.grade === "A").map(brief),
+    // A등급이 수십 개 나오는 종목이 있다. 전부 실으면 프롬프트가 길어져 응답이 느려지고,
+    // 모델은 어차피 5~8문장만 쓴다. 개수는 따로 알려주고 본문은 상위 12개까지만.
+    "A등급_개수": report.signals.filter((s) => s.grade === "A").length,
+    "A등급(여섯관문통과)": report.signals
+      .filter((s) => s.grade === "A")
+      .slice(0, 12)
+      .map(brief),
     상위조합: report.combos.slice(0, 3).map(brief),
     지금켜진A등급: report.signals
       .filter((s) => s.grade === "A" && s.currentlyOn)

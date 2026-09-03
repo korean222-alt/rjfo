@@ -80,7 +80,9 @@ const DEFAULT_DEADLINE_MS = 15_000;
  * 남은 예산에서 다음 후보용 여유만 떼고 나머지를 첫 모델에 몰아준다.
  */
 const PER_ATTEMPT_MIN_MS = 5_500;
-const PER_ATTEMPT_MAX_MS = 12_000;
+// 실측(2026-09, /api/diag?ai=1): gemini-3.8-flash가 32토큰짜리 "연결됨" 한마디에 5.8초,
+// 503 재시도가 끼면 9.6초를 쓴다. 리포트 전체를 넣는 요약은 그보다 더 걸린다.
+const PER_ATTEMPT_MAX_MS = 14_000;
 const NEXT_MODEL_RESERVE_MS = 2_000;
 
 export function attemptBudget(remainingMs: number): number {

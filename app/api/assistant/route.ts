@@ -81,7 +81,7 @@ async function polish(facts: string, user: string): Promise<string | null> {
       prompt: `사용자: ${user}\n\nFACTS:\n${facts}\n\n이 FACTS만 가지고 답해라.`,
       json: false,
       maxOutputTokens: 512,
-      deadlineMs: 8_000,
+      deadlineMs: 14_000,
     });
     const trimmed = text.trim();
     if (trimmed.startsWith("{") || trimmed.startsWith("```") || trimmed.length < 40) return null;
