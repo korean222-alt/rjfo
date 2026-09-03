@@ -4,12 +4,22 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BtcSpotHeader from "@/components/BtcSpotHeader";
 import CycleSignalTable from "@/components/CycleSignalTable";
-import { GradeBadge, TimingChip, chancePct, chanceTone, leadText, qTone } from "@/components/SignalMeta";
+import EngineBar from "@/components/EngineBar";
+import {
+  GradeBadge,
+  TimingChip,
+  chancePct,
+  chanceTone,
+  leadText,
+  looksLikeCoincidence,
+  qTone,
+} from "@/components/SignalMeta";
 import NavTabs from "@/components/NavTabs";
 import PositionPanel from "@/components/PositionPanel";
 import TickerInput from "@/components/TickerInput";
 import TimeframeSelect from "@/components/TimeframeSelect";
 import { SIGNAL_GROUPS, completedStarts, factsForLlm, snapshotOnPct } from "@/lib/cycle";
+import type { GradedSignal } from "@/lib/cycle";
 import { enrichForPlot, plotForView } from "@/lib/cycle/plot";
 import {
   barsForView,
@@ -20,6 +30,7 @@ import {
 } from "@/lib/cycle/resample";
 import { askCycle, runCycle, type CyclePayload } from "@/lib/cycle-client";
 import { isCryptoTicker, isValidTicker, normalizeTicker } from "@/lib/data/provider";
+import { modelLabel } from "@/lib/format";
 import { clearCycle, loadCycle, saveCycle } from "@/lib/session";
 import { toTradingViewSymbol } from "@/lib/tradingview";
 
@@ -56,6 +67,8 @@ export default function CyclePage() {
   const [asking, setAsking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
   const [tf, setTf] = useState<ChartTf>("1d");
+  /** '숫자만 100%'인 지표들은 기본으로 접어 둔다. 펼치는 건 사용자가 정한다. */
+  const [showNoise, setShowNoise] = useState(false);
   const chartRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -259,6 +272,22 @@ export default function CyclePage() {
   );
 
   /**
+   * 그 100%가 무언가를 뜻하는 것과, 자주 떠서 저절로 나온 것을 갈라 놓는다.
+   *
+   * 예전에는 줄마다 같은 경고를 붙였다. 여덟 줄이 전부 빨간 경고가 되면 읽는 사람은
+   * "그래서 뭘 믿으라는 거냐"가 된다 — 경고가 많을수록 아무 정보도 주지 못한다.
+   * 갈라 놓고 개수를 먼저 말한 다음, 걸러진 쪽은 접어서 이유를 한 번만 적는다.
+   */
+  const commonTrusted = useMemo(
+    () => commonSignals.filter((s) => !looksLikeCoincidence(s)),
+    [commonSignals],
+  );
+  const commonNoise = useMemo(
+    () => commonSignals.filter((s) => looksLikeCoincidence(s)),
+    [commonSignals],
+  );
+
+  /**
    * 매수 근거가 있는 신호 = 여섯 관문을 다 통과한 것(A).
    * 하나도 없으면 그 사실을 그대로 보여준다. 억지로 순위 1위를 추천하지 않는다.
    */
@@ -299,7 +328,7 @@ export default function CyclePage() {
   );
 
   return (
-    <main className="mx-auto max-w-lg px-4 py-6 pb-28">
+    <main className="mx-auto max-w-lg px-4 py-6 pb-32">
       <NavTabs />
 
       <header className="mb-6">
@@ -401,8 +430,14 @@ export default function CyclePage() {
           <section className="rounded-2xl border border-blue-500/30 bg-blue-500/5 p-4">
             <div className="flex items-baseline justify-between gap-2">
               <h2 className="text-sm font-semibold">AI 요약</h2>
-              <span className="text-[10px] text-muted">
-                {payload.model ? `Gemini ${payload.model}` : "AI 없이 계산 결과만"}
+              <span
+                className={`rounded border px-1.5 py-0.5 text-[10px] ${
+                  payload.model
+                    ? "border-blue-500/40 bg-blue-500/10 text-blue-200"
+                    : "border-border text-muted"
+                }`}
+              >
+                {payload.model ? modelLabel(payload.model) : "AI 없음 · 서버 요약문"}
               </span>
             </div>
             <p className="mt-2 text-sm leading-relaxed">{payload.reply}</p>
@@ -410,9 +445,9 @@ export default function CyclePage() {
               <div className="mt-3 rounded-xl border border-border bg-bg px-3 py-2.5">
                 <p className="text-[11px] text-muted">Q. {qa.q}</p>
                 <p className="mt-1 text-sm leading-relaxed">{qa.a}</p>
-                {qa.model ? (
-                  <p className="mt-1.5 text-[10px] text-muted">Gemini {qa.model}</p>
-                ) : null}
+                <p className="mt-1.5 text-[10px] text-muted">
+                  {qa.model ? modelLabel(qa.model) : "AI 없음 · 서버 요약문"}
+                </p>
               </div>
             ) : null}
 
@@ -445,6 +480,11 @@ export default function CyclePage() {
             </form>
             <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
               이 화면에 이미 계산된 숫자만 보고 답합니다. 종목을 다시 분석하지 않습니다.
+              <br />
+              <b className="text-white">차트 분석 자체에는 AI가 필요 없습니다</b> — 사이클 탐지,
+              지표 채점, 적중률·우연대비·q값, 여섯 관문 등급은 전부 서버 코드가 수식으로 계산합니다.
+              AI는 그 숫자를 한국어 문장으로 옮기는 일만 하고, 꺼져 있으면 서버가 만든 요약문이
+              대신 나옵니다(아래 숫자는 그대로).
             </p>
           </section>
 
@@ -820,78 +860,91 @@ export default function CyclePage() {
             </div>
           </section>
 
-          {/* 공통 지표 — 100% 적중은 그 자체로는 근거가 아니다 */}
+          {/* 공통 지표 — 100% 적중은 그 자체로는 근거가 아니다.
+              경고를 줄마다 반복하면 화면이 전부 빨개져서 "그래서 뭘 믿으라는 거냐"가 된다.
+              그래서 여기서 미리 갈라 놓고, 걸러진 것들은 접어 둔 채 이유를 한 번만 적는다. */}
           <section className="rounded-2xl border border-border bg-surface p-4">
             <div className="flex items-baseline justify-between gap-2">
               <h2 className="text-sm font-semibold">
                 {report.cycles.length}번을 전부 잡은 지표
               </h2>
-              <span className="text-xs text-muted">우연대비 순</span>
+              <span className="text-xs text-muted">{commonSignals.length}개</span>
             </div>
-            <p className="mt-1 text-[11px] leading-relaxed text-amber-300/80">
-              100%는 그 자체로 근거가 아닙니다. 신호가 수백 번 뜨는 지표는 사이클을 전부 맞히는 게
-              당연합니다 — 그래서 <b>우연대비</b>를 먼저 보세요. 1.0배면 아무 날이나 찍은 것과 같습니다.
-            </p>
+
             {commonSignals.length ? (
               <>
-                <ul className="mt-2.5 space-y-1.5">
-                  {commonSignals.map((s) => (
-                    <li key={s.key}>
-                      <button
-                        type="button"
-                        onClick={() => showSignal(s.key)}
-                        className="w-full rounded-lg px-1 py-1 text-left text-sm active:bg-bg"
-                      >
-                        <span className="flex items-center gap-2">
-                          <span
-                            aria-hidden
-                            className={`h-2 w-2 shrink-0 rounded-full ${s.currentlyOn ? "bg-up" : "bg-border"}`}
-                          />
-                          <span className="min-w-0 flex-1 truncate">{s.label}</span>
-                          <span className="shrink-0 text-sm font-bold">
-                            {s.hitCount}/{s.coverage.cyclesCovered}
-                          </span>
-                          <span className="shrink-0 text-[11px] text-muted">
-                            {s.currentlyOn ? "켜짐" : "꺼짐"}
-                          </span>
-                          <span aria-hidden className="shrink-0 text-[11px] text-muted">
-                            📈
-                          </span>
-                        </span>
-                        <span className="mt-0.5 flex flex-wrap gap-x-3 pl-4 text-[11px] text-muted">
-                          <span
-                            className={
-                              s.lift != null && s.lift >= 1.5 ? "font-semibold text-up" : "text-down"
-                            }
-                          >
-                            우연대비 {s.lift == null ? "—" : `${s.lift.toFixed(1)}배`}
-                          </span>
-                          <span>신호 {s.eventCount}회</span>
-                          <span className={chanceTone(s.chance)}>우연일 확률 {chancePct(s.chance)}</span>
-                          <span>
-                            리드{" "}
-                            {s.medianLeadDays == null
-                              ? "—"
-                              : s.medianLeadDays >= 0
-                                ? `${s.medianLeadDays}일 늦게`
-                                : `${Math.abs(s.medianLeadDays)}일 먼저`}
-                          </span>
-                        </span>
-                        {(s.lift != null && s.lift < 1.5) || (s.chance != null && s.chance >= 0.2) ? (
-                          <span className="mt-0.5 block pl-4 text-[11px] leading-relaxed text-down">
-                            ⚠ 신호가 {s.eventCount}회로 잦아 100%가 저절로 나옵니다. 이걸 보고 사는 건
-                            아무 날이나 사는 것과 크게 다르지 않습니다.
-                          </span>
-                        ) : null}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                <p
+                  className={`mt-1.5 rounded-lg border px-2.5 py-2 text-[11px] leading-relaxed ${
+                    commonTrusted.length
+                      ? "border-up/30 bg-up/5 text-white"
+                      : "border-down/30 bg-down/5 text-down"
+                  }`}
+                >
+                  {commonTrusted.length ? (
+                    <>
+                      적중률 100%짜리 {commonSignals.length}개 중{" "}
+                      <b>{commonTrusted.length}개</b>만 우연으로 설명되지 않습니다. 나머지{" "}
+                      {commonNoise.length}개는 자주 떠서 저절로 100%가 된 것이라 접어 뒀습니다.
+                    </>
+                  ) : (
+                    <>
+                      여기서 믿을 건 <b>하나도 없습니다</b>. {commonSignals.length}개 전부 자주
+                      떠서 저절로 100%가 된 쪽입니다(우연대비 1.5배 미만이거나 우연일 확률 20%
+                      이상). 100%라는 숫자만 보고 사면 아무 날이나 사는 것과 다르지 않습니다.
+                    </>
+                  )}
+                </p>
+
+                {commonTrusted.length ? (
+                  <ul className="mt-2.5 space-y-1.5">
+                    {commonTrusted.map((s) => (
+                      <li key={s.key}>
+                        <CommonSignalRow signal={s} onClick={() => showSignal(s.key)} />
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+
+                {commonNoise.length ? (
+                  <div className="mt-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowNoise((v) => !v)}
+                      aria-expanded={showNoise}
+                      className="w-full rounded-lg border border-border bg-bg px-2.5 py-2 text-left text-[11px] text-muted"
+                    >
+                      {showNoise ? "▾" : "▸"} 숫자만 100%인 것 {commonNoise.length}개{" "}
+                      {showNoise ? "접기" : "펼쳐 보기"}
+                    </button>
+                    {showNoise ? (
+                      <>
+                        <p className="mt-1.5 px-1 text-[11px] leading-relaxed text-muted">
+                          아래는 <b className="text-white">전부 같은 이유로 걸렀습니다</b>: 신호가
+                          너무 잦아 사이클 {report.cycles.length}번을 다 맞히는 게 당연한 지표들입니다.
+                          우연대비가 1.0배면 아무 날이나 찍은 것과 같고, 1.5배(관문 ②)를 못 넘으면
+                          매수 근거로 쓰지 않습니다.
+                        </p>
+                        <ul className="mt-1.5 space-y-1.5 opacity-70">
+                          {commonNoise.map((s) => (
+                            <li key={s.key}>
+                              <CommonSignalRow signal={s} onClick={() => showSignal(s.key)} />
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <p className="mt-2.5 border-t border-border pt-2 text-[11px] leading-relaxed text-muted">
                   {report.cycles.length}번을 전부, 그 부근에서 <b className="text-white">새로 켜지면서</b> 잡은
                   지표입니다. 다만 이 목록은 <b className="text-white">적중률로 골라낸 것</b>이라 그
                   자체가 끼워 맞추기에 가깝습니다 — 자주 켜지는 지표일수록 여기 들어오기 쉽습니다.
-                  실제로 살 만한지는 위의 <b className="text-white">여섯 관문(A등급)</b>이 판정합니다.
+                  <b className="text-white"> 그래서 무엇을 볼지는 이 목록이 아니라</b> 위의{" "}
+                  <b className="text-white">여섯 관문(A등급)</b>이 정합니다
+                  {buySignals.length
+                    ? ` — 지금 A등급은 ${buySignals.length}개입니다.`
+                    : " — 지금 A등급은 하나도 없습니다. 그게 결론입니다."}
                 </p>
               </>
             ) : (
@@ -982,9 +1035,44 @@ export default function CyclePage() {
         </div>
       ) : null}
 
-      <p className="fixed inset-x-0 bottom-0 border-t border-border bg-bg/95 py-3 text-center text-xs text-muted backdrop-blur">
-        과거 패턴이며 투자 판단의 근거가 아닙니다.
-      </p>
+      <EngineBar model={qa?.model ?? payload?.model ?? null} />
     </main>
+  );
+}
+
+/**
+ * '전부 잡은 지표' 한 줄. 믿을 만한 쪽과 걸러진 쪽이 같은 모양이어야
+ * 무엇이 둘을 갈랐는지(우연대비·우연일 확률) 바로 비교된다.
+ */
+function CommonSignalRow({ signal: s, onClick }: { signal: GradedSignal; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full rounded-lg px-1 py-1 text-left text-sm active:bg-bg"
+    >
+      <span className="flex items-center gap-2">
+        <span
+          aria-hidden
+          className={`h-2 w-2 shrink-0 rounded-full ${s.currentlyOn ? "bg-up" : "bg-border"}`}
+        />
+        <span className="min-w-0 flex-1 truncate">{s.label}</span>
+        <span className="shrink-0 text-sm font-bold">
+          {s.hitCount}/{s.coverage.cyclesCovered}
+        </span>
+        <span className="shrink-0 text-[11px] text-muted">{s.currentlyOn ? "켜짐" : "꺼짐"}</span>
+        <span aria-hidden className="shrink-0 text-[11px] text-muted">
+          📈
+        </span>
+      </span>
+      <span className="mt-0.5 flex flex-wrap gap-x-3 pl-4 text-[11px] text-muted">
+        <span className={s.lift != null && s.lift >= 1.5 ? "font-semibold text-up" : "text-down"}>
+          우연대비 {s.lift == null ? "—" : `${s.lift.toFixed(1)}배`}
+        </span>
+        <span>신호 {s.eventCount}회</span>
+        <span className={chanceTone(s.chance)}>우연일 확률 {chancePct(s.chance)}</span>
+        <span>리드 {leadText(s.medianLeadDays)}</span>
+      </span>
+    </button>
   );
 }

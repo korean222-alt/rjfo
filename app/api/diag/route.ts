@@ -2,6 +2,12 @@ import { json } from "@/lib/json-response";
 import { getProviders } from "@/lib/data";
 import { DataProviderError, isValidTicker, normalizeTicker } from "@/lib/data/provider";
 import { fundingInstrument, probeFundingSources } from "@/lib/data/funding";
+import {
+  getWorkingModel,
+  LATEST_ALIAS,
+  PINNED_NEWEST,
+  STATIC_CANDIDATES,
+} from "@/lib/gemini";
 import { kvConfigured, kvSource } from "@/lib/kv";
 
 export const runtime = "nodejs";
@@ -69,6 +75,14 @@ export async function GET(req: Request) {
       kvEnvNames: kvSource(),
       hasGeminiKey: Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
       hasTwelveDataKey: Boolean(process.env.TWELVE_DATA_API_KEY),
+    },
+    // 어떤 모델로 답하고 있는지. 화면의 모델 이름이 이상할 때 여기서 체인을 확인한다.
+    // (workingModel은 이 람다 인스턴스가 마지막으로 성공한 모델이라 null일 수 있다.)
+    ai: {
+      pinned: PINNED_NEWEST,
+      alias: LATEST_ALIAS,
+      fallbacks: STATIC_CANDIDATES,
+      workingModel: getWorkingModel(),
     },
     sources,
     funding: {

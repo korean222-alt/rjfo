@@ -36,6 +36,22 @@ export function qTone(q: number | null | undefined): string {
   return "text-down";
 }
 
+/**
+ * 적중률 100%가 그 자체로는 근거가 못 되는 지표인가.
+ *
+ * 기준은 등급 관문과 같은 자를 쓴다 — 우연대비 1.5배(관문 ②)와 우연일 확률 20%.
+ * 화면마다 다른 기준으로 경고를 띄우면 "여긴 빨간데 저긴 초록"이 되어 또 못 믿는다.
+ */
+export function looksLikeCoincidence(s: {
+  lift: number | null;
+  chance: number | null;
+}): boolean {
+  if (s.lift != null && s.lift < 1.5) return true;
+  if (s.chance != null && s.chance >= 0.2) return true;
+  // 둘 다 못 잰 지표는 근거가 있다고 말할 수 없다.
+  return s.lift == null && s.chance == null;
+}
+
 const GRADE_STYLE: Record<Grade, string> = {
   A: "border-up/60 bg-up/15 text-up",
   B: "border-sky-500/50 bg-sky-500/10 text-sky-300",

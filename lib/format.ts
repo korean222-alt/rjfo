@@ -23,6 +23,24 @@ export function num(n: number | null, digits = 2): string {
   return n.toFixed(digits);
 }
 
+/**
+ * 모델 id를 사람이 읽는 이름으로. "gemini-3.8-flash" → "Gemini 3.8 Flash".
+ *
+ * 화면에 id를 그대로 박지 않는 이유: 폴백 체인 때문에 어떤 요청이 어떤 모델로
+ * 처리됐는지가 매번 다르다. 무엇이 답했는지는 사용자가 알아야 하고, 별칭으로
+ * 처리된 경우엔 "그때그때 다른 모델"이라는 사실까지 알아야 한다.
+ */
+export function modelLabel(id: string | null | undefined): string {
+  if (!id) return "";
+  const bare = id.replace(/^models\//, "");
+  const alias = bare.endsWith("-latest");
+  const pretty = (alias ? bare.slice(0, -"-latest".length) : bare)
+    .split("-")
+    .map((w) => (/^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
+  return alias ? `${pretty} (최신 별칭)` : pretty;
+}
+
 /** 수익률 색상. */
 export function returnColor(n: number | null): string {
   if (n == null || !isFinite(n)) return "text-muted";

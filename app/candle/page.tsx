@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import EngineBar from "@/components/EngineBar";
 import NavTabs from "@/components/NavTabs";
 import TickerInput from "@/components/TickerInput";
 import { GradeBadge, chancePct, qTone } from "@/components/SignalMeta";
@@ -13,6 +14,7 @@ import {
 } from "@/lib/candle";
 import { askCandle, runCandle, type CandlePayload } from "@/lib/candle-client";
 import { isValidTicker, normalizeTicker } from "@/lib/data/provider";
+import { modelLabel } from "@/lib/format";
 import { loadCandle, saveCandle } from "@/lib/session";
 
 const CycleChart = dynamic(() => import("@/components/CycleChart"), {
@@ -186,7 +188,7 @@ export default function CandlePage() {
   const lastBar = report?.read[report.read.length - 1] ?? null;
 
   return (
-    <main className="mx-auto max-w-lg px-4 py-6 pb-28">
+    <main className="mx-auto max-w-lg px-4 py-6 pb-32">
       <NavTabs />
 
       <header className="mb-6">
@@ -269,8 +271,14 @@ export default function CandlePage() {
           <section className="rounded-2xl border border-blue-500/30 bg-blue-500/5 p-4">
             <div className="flex items-baseline justify-between gap-2">
               <h2 className="text-sm font-semibold">AI 요약</h2>
-              <span className="text-[10px] text-muted">
-                {payload.model ? `Gemini ${payload.model}` : "AI 없이 계산 결과만"}
+              <span
+                className={`rounded border px-1.5 py-0.5 text-[10px] ${
+                  payload.model
+                    ? "border-blue-500/40 bg-blue-500/10 text-blue-200"
+                    : "border-border text-muted"
+                }`}
+              >
+                {payload.model ? modelLabel(payload.model) : "AI 없음 · 서버 요약문"}
               </span>
             </div>
             <p className="mt-2 text-sm leading-relaxed">{payload.reply}</p>
@@ -278,7 +286,9 @@ export default function CandlePage() {
               <div className="mt-3 rounded-xl border border-border bg-bg px-3 py-2.5">
                 <p className="text-[11px] text-muted">Q. {qa.q}</p>
                 <p className="mt-1 text-sm leading-relaxed">{qa.a}</p>
-                {qa.model ? <p className="mt-1.5 text-[10px] text-muted">Gemini {qa.model}</p> : null}
+                <p className="mt-1.5 text-[10px] text-muted">
+                  {qa.model ? modelLabel(qa.model) : "AI 없음 · 서버 요약문"}
+                </p>
               </div>
             ) : null}
             {askError ? (
@@ -309,6 +319,10 @@ export default function CandlePage() {
             </form>
             <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
               이 화면에 이미 계산된 숫자만 보고 답합니다. 종목을 다시 분석하지 않습니다.
+              <br />
+              <b className="text-white">캔들 판독에는 AI가 필요 없습니다</b> — 봉 모양 인식, 패턴
+              채점, 기저율 대비, 우연일 확률은 전부 서버 코드가 수식으로 계산합니다. AI는 그
+              숫자를 문장으로 옮길 뿐이고, 꺼져 있으면 서버가 만든 요약문이 대신 나옵니다.
             </p>
           </section>
 
@@ -645,6 +659,8 @@ export default function CandlePage() {
           </section>
         </div>
       ) : null}
+
+      <EngineBar model={qa?.model ?? payload?.model ?? null} />
     </main>
   );
 }

@@ -101,16 +101,32 @@ Vercel 대시보드 → Storage에서 KV(Upstash Redis) 스토어를 만들어 �
 
 ## AI 모델 (Gemini)
 
-모델명을 버전 고정하지 않는다. `gemini-2.5-flash`처럼 박아두면 구글이 조용히 폐기했을 때
-"신규 사용자에게 더 이상 제공되지 않음" 404를 맞는다. 그래서 `lib/gemini.ts`는 폴백 체인을 쓴다.
+> **AI는 분석을 하지 않는다.** 사이클 탐지, 지표 채점, 적중률·우연대비·q값, 여섯 관문 등급,
+> 캔들 패턴 판독은 전부 서버 코드가 수식으로 계산한다(`lib/cycle/`, `lib/candle/`, `lib/indicators.ts`).
+> Gemini는 그렇게 나온 숫자를 한국어 문장으로 옮기는 일만 한다. 키가 없거나 모델이 전부 막히면
+> `narrate()`가 만든 템플릿 문장이 대신 나가고 **화면의 숫자는 그대로다**. 화면 맨 아래
+> `EngineBar`가 "숫자 = 서버 계산 / 문장 = 어떤 모델"을 항상 표시한다.
 
 **시도 순서**
 
 1. 마지막으로 성공한 모델 (`workingModel` — 람다 인스턴스가 기억)
-2. `gemini-flash-latest` — 구글이 계속 최신 flash로 가리켜주는 별칭
-3. 정적 후보: `gemini-flash-lite-latest` → `gemini-3.6-flash` → `gemini-3.5-flash` → lite/preview → 구형 2.5/2.0/1.5
-4. 그래도 전부 막히면 `/v1beta/models`를 조회해 이 키로 **실제 쓸 수 있는** 모델을 찾는다
-   (flash 계열 우선, TTS·이미지·임베딩은 제외)
+2. `gemini-3.8-flash` — 최신 핀(`PINNED_NEWEST`)
+3. `gemini-flash-latest` — 구글이 계속 최신 flash로 가리켜주는 별칭
+4. 정적 후보: `gemini-flash-lite-latest` → `gemini-3.8-flash-lite` → `3.7` → `3.6` → `3.5` → lite/preview → 구형 2.5/2.0/1.5
+5. 그래도 전부 막히면 `/v1beta/models`를 조회해 이 키로 **실제 쓸 수 있는** 모델을 찾는다
+   (flash 계열 우선 → 같은 등급이면 버전 높은 순, TTS·이미지·임베딩은 제외)
+
+버전을 박은 모델이 체인 **맨 앞**에 있는 건 이 파일의 "버전 고정 금지" 원칙과 어긋나 보이지만,
+위험한 건 버전을 박는 것 자체가 아니라 *그것만* 쓰는 것이다. 맨 앞에 두면 폐기됐을 때 404 한 번을
+먹고 곧장 별칭으로 흘러내리고(그 뒤로는 그 인스턴스에서 다시 부르지 않는다), 대신 구글이 별칭을
+새 모델로 옮겨 붙이기 전까지의 공백에도 최신 모델을 쓸 수 있다. 새 모델이 나오면 `PINNED_NEWEST`
+한 줄만 갈면 된다.
+
+**생각(thinking) 설정**: Gemini 3.x는 기본으로 생각을 하고 3.8 Flash의 기본값은 `medium`이다.
+생각 토큰이 `maxOutputTokens`를 깎아 먹어서 그대로 두면 (1) 느려져 시간 예산을 넘기고
+(2) 700토큰 예산을 생각이 다 써서 본문이 빈 채로 돌아온다. 그래서 3.x로 판단되는 모델에는
+`thinkingConfig.thinkingLevel = "low"`를 실어 보낸다. 이 앱이 모델에게 시키는 일은
+"이미 계산된 숫자를 문장으로 옮기기"뿐이라 low로 충분하다.
 
 **실패 처리**
 
@@ -119,7 +135,12 @@ Vercel 대시보드 → Storage에서 KV(Upstash Redis) 스토어를 만들어 �
 | 429 (한도 초과) | 재시도 없이 즉시 다음 모델. 같은 모델을 다시 두드려도 한도는 그대로다 |
 | 5xx (순간 장애) | 같은 모델 한 번만 재시도, 그래도 실패면 다음 모델 |
 | 404 (폐기/접근 불가) | 폐기 목록에 넣고 이후 요청에서도 건너뜀 |
+| 400 (`thinking` 관련) | `thinkingConfig`만 빼고 같은 모델로 한 번 더 (구형 모델은 이 필드를 모른다) |
 | 400 (응답 형식 문제) | `responseMimeType: application/json`만 빼고 한 번 더 |
+| 200인데 본문이 빔 | 생각이 출력 예산을 다 쓴 경우 → 생각을 끄고 한 번 더, 그래도 비면 다음 모델 |
+
+재시도는 **이유별로 한 번씩만** 허용한다. 라운드 수로 세면 이유가 겹칠 때 같은 모델을 서너 번
+두드리게 되고 그만큼 다음 모델을 시도할 예산이 사라진다.
 
 **시간 예산**: 체인 전체에 `AI_DEADLINE_MS`(기본 15초)를 건다. Vercel 함수가 자체 타임아웃으로
 죽어서 502를 뱉는 대신, 예산 안에 사람이 읽을 수 있는 에러를 반환한다. 개별 호출도 최대 9초.
@@ -129,7 +150,8 @@ Vercel 대시보드 → Storage에서 KV(Upstash Redis) 스토어를 만들어 �
 > 전에 앱이 먼저 사람이 읽을 수 있는 에러를 반환한다.
 
 키 하나만 꽂으면 되는 게 아니라, **모델이 조용히 폐기돼도 자동으로 우회하는 구조**다.
-`npm run test:gemini`가 위 시나리오 9가지를 전부 검증한다.
+`npm run test:gemini`가 위 시나리오를 전부 검증한다(실제 API 호출 없이 `fetch`를 갈아끼운다).
+지금 어떤 모델이 쓰이는지는 화면 맨 아래 바와 `/api/diag`의 `ai` 항목에서 확인한다.
 
 ## 데이터 소스
 
@@ -307,10 +329,11 @@ lib/
   filter.ts                 FilterSpec 적용 + 클러스터링
   stats.ts                  forward return, base rate, edge
   presets.ts                프리셋 정의
-  gemini.ts                 Gemini 호출 + 모델 폴백 체인 + 시간 예산
+  gemini.ts                 Gemini 호출 + 모델 폴백 체인 + 생각 설정 + 시간 예산
   validate-spec.ts          LLM 출력 검증 (알려진 값만 통과)
 components/                 TickerInput, CommandInput, SummaryCard, VolumeChart, MatchList,
-                            NavTabs, CycleChart, CycleSignalTable, PositionPanel
+                            NavTabs, CycleChart, CycleSignalTable, PositionPanel,
+                            EngineBar(무엇이 계산했나 + 어떤 모델이 썼나)
 scripts/                    selftest.ts, verify.ts, gemini-test.ts, cycle-test.ts, candle-test.ts
 vercel.json                 프레임워크 고정 + 알림 크론 스케줄
 ```
